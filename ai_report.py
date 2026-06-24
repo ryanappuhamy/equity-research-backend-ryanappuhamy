@@ -39,7 +39,12 @@ State explicitly whether the multiples imply premium or discount and on which me
 Margins, returns on capital, growth, balance sheet — what the numbers say.
 
 ## Analyst Consensus (if available)
-Real analyst price targets and recent rating actions. Attribute clearly.
+Real analyst data: buy/hold/sell counts, overall recommendation, price targets (mean/high/low),
+and next-quarter EPS estimates. Attribute clearly to analysts — cite Finnhub/FMP sources from the data.
+Compare current price to analyst price target where both are present.
+
+## Earnings Estimates (if available)
+Next quarter EPS estimate and analyst count. Attribute to Finnhub analyst estimates.
 
 ## Macro Context (if available)
 How the current rate/inflation environment matters for this name.
@@ -181,12 +186,33 @@ def _template_report(payload: dict, reason: str = "") -> str:
     if analysts.get("available") is False:
         lines.append(f"- Data unavailable: {analysts.get('note', 'unknown')}")
     else:
-        pt = analysts.get("price_target_consensus")
-        if pt:
-            lines.append(f"- **Price target consensus:** {pt}")
+        lines.append(f"- **Source:** {analysts.get('source', 'N/A')}")
+        consensus = analysts.get("consensus") or {}
+        if consensus.get("available"):
+            lines.append(
+                f"- **Overall recommendation:** {consensus.get('overall_recommendation', 'N/A')} "
+                f"(Strong Buy: {consensus.get('strong_buy', 0)}, Buy: {consensus.get('buy', 0)}, "
+                f"Hold: {consensus.get('hold', 0)}, Sell: {consensus.get('sell', 0)}, "
+                f"Strong Sell: {consensus.get('strong_sell', 0)})"
+            )
+        pt = analysts.get("price_target") or {}
+        if pt.get("available"):
+            lines.append(
+                f"- **Price target (Finnhub):** mean ${pt.get('mean', 'N/A')}, "
+                f"high ${pt.get('high', 'N/A')}, low ${pt.get('low', 'N/A')}"
+            )
+        est = analysts.get("earnings_estimates") or {}
+        if est.get("available"):
+            lines.append(
+                f"- **Next quarter EPS estimate:** {est.get('eps_estimate', 'N/A')} "
+                f"(period {est.get('period', 'N/A')}, {est.get('num_analysts', 'N/A')} analysts)"
+            )
+        fmp_pt = analysts.get("fmp_price_target_consensus")
+        if fmp_pt:
+            lines.append(f"- **FMP price target consensus:** {fmp_pt}")
         actions = analysts.get("recent_rating_actions") or []
         if actions:
-            lines.append(f"- **Recent rating actions:** {len(actions)} on record")
+            lines.append(f"- **Recent rating actions (FMP):** {len(actions)} on record")
     lines.append("")
 
     lines.append("## Insider Activity")
