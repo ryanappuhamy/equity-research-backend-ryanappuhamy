@@ -5,7 +5,9 @@ Portfolio tracker — PostgreSQL (Supabase) or SQLite storage for positions and 
 from datetime import datetime, timezone
 
 import pandas as pd
-import yfinance as yf
+
+import market_cache
+from yfinance_client import yf_download
 from sqlalchemy import Column, DateTime, Float, Integer, String
 from sqlalchemy.orm import Session
 
@@ -128,8 +130,14 @@ def replace_portfolio(
 def _fetch_prices(tickers: list[str]) -> dict[str, float]:
     if not tickers:
         return {}
+    tickers = [t.upper() for t in tickers]
+
+    cached = market_cache.get_live_prices(tickers)
+    if cached is not None:
+        return cached
+
     try:
-        data = yf.download(
+        data = yf_download(
             tickers,
             period="5d",
             auto_adjust=True,
@@ -152,6 +160,7 @@ def _fetch_prices(tickers: list[str]) -> dict[str, float]:
             except (KeyError, TypeError) as e:
                 print(f"[error] yfinance: no price data for {ticker}: {e}")
                 continue
+        market_cache.set_live_prices(tickers, prices)
         return prices
     except Exception as e:
         print(f"[error] yfinance price fetch failed for {tickers}: {e}")

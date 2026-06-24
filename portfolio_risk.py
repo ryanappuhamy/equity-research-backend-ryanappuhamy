@@ -4,7 +4,8 @@ Portfolio risk decomposition using 1 year of daily price history (yfinance).
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
+
+from yfinance_client import yf_download
 
 
 def _download_returns(tickers: list[str], period: str = "1y") -> pd.DataFrame:
@@ -13,7 +14,7 @@ def _download_returns(tickers: list[str], period: str = "1y") -> pd.DataFrame:
         return pd.DataFrame()
 
     try:
-        data = yf.download(
+        data = yf_download(
             tickers,
             period=period,
             auto_adjust=True,
@@ -82,7 +83,7 @@ def _risk_contributions(cov: pd.DataFrame, weights: pd.Series) -> pd.Series:
 
 def _download_benchmark_returns(benchmark: str, period: str = "1y") -> pd.Series:
     try:
-        data = yf.download(benchmark, period=period, auto_adjust=True, progress=False)
+        data = yf_download(benchmark, period=period, auto_adjust=True, progress=False)
         if data.empty or "Close" not in data.columns:
             print(f"[error] yfinance returned empty data for benchmark {benchmark}")
             return pd.Series(dtype=float)

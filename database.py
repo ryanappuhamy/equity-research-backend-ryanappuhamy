@@ -39,6 +39,7 @@ def init_db() -> None:
 
     import portfolio  # noqa: F401 — register Position model
     import alerts  # noqa: F401 — register Alert model
+    import market_cache  # noqa: F401 — register MarketDataCache model
 
     Base.metadata.create_all(bind=engine)
     _db_initialized = True
