@@ -1,8 +1,8 @@
 """
 Fundamentals & price data collection.
 
-Primary source: Financial Modeling Prep (if FMP_API_KEY is set) — cleaner data,
-longer history, reliable peer lists.
+Primary source: Alpha Vantage OVERVIEW (if ALPHA_VANTAGE_API_KEY is set) — P/E and
+revenue growth without yfinance rate limits.
 Fallback: yfinance — free but occasionally incomplete.
 
 Everything returned here is OBJECTIVE data (reported financials, market prices).
@@ -18,6 +18,7 @@ import market_cache
 from yfinance_client import yf_analyst_price_targets, yf_download, yf_ticker_info
 
 FMP_BASE = "https://financialmodelingprep.com/api/v3"
+ALPHAVANTAGE_BASE = "https://www.alphavantage.co/query"
 
 
 # ---------------------------------------------------------------------------
@@ -85,21 +86,47 @@ def get_price_stats(prices: pd.DataFrame, ticker: str = "") -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Fundamentals — FMP primary, yfinance fallback
+# Fundamentals — Alpha Vantage primary, yfinance fallback
 # ---------------------------------------------------------------------------
 
-def _fmp_get(endpoint: str, params: dict | None = None) -> list | dict:
-    params = params or {}
-    params["apikey"] = config.FMP_API_KEY
-    r = requests.get(f"{FMP_BASE}/{endpoint}", params=params, timeout=20)
+def _alphavantage_overview(ticker: str) -> dict:
+    r = requests.get(
+        ALPHAVANTAGE_BASE,
+        params={
+            "function": "OVERVIEW",
+            "symbol": ticker,
+            "apikey": config.ALPHA_VANTAGE_API_KEY,
+        },
+        timeout=20,
+    )
     r.raise_for_status()
-    return r.json()
+    data = r.json()
+    if not isinstance(data, dict):
+        raise ValueError(f"Alpha Vantage returned invalid overview for {ticker}")
+    if data.get("Symbol") is None:
+        msg = data.get("Note") or data.get("Information") or data.get("Error Message")
+        raise ValueError(msg or f"Alpha Vantage returned no overview for {ticker}")
+    return data
+
+
+def _av_float(val) -> float | None:
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip()
+    if not s or s.lower() in ("none", "null", "-", "n/a"):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
 
 
 def get_fundamentals(ticker: str) -> dict:
     """
-    Key fundamental metrics. FMP profile + income statement first for P/E and
-    revenue growth; yfinance only if FMP fails or those fields are empty.
+    Key fundamental metrics. Alpha Vantage OVERVIEW first for P/E and revenue
+    growth; yfinance only if Alpha Vantage fails or those fields are empty.
     """
     ticker = ticker.upper()
     cached = market_cache.get_fundamentals(ticker)
@@ -107,20 +134,23 @@ def get_fundamentals(ticker: str) -> dict:
         return cached
 
     result: dict | None = None
-    if config.FMP_API_KEY:
+    if config.ALPHA_VANTAGE_API_KEY:
         try:
-            fmp = _fundamentals_fmp(ticker)
-            if _fmp_core_metrics_present(fmp):
-                result = fmp
+            av = _fundamentals_alphavantage(ticker)
+            if _core_metrics_present(av):
+                result = av
             else:
                 print(
-                    f"[warn] FMP returned empty P/E or revenue growth for {ticker}, "
+                    f"[warn] Alpha Vantage returned empty P/E or revenue growth for {ticker}, "
                     "falling back to yfinance for missing fields"
                 )
                 yf = _fundamentals_yfinance(ticker)
-                result = _merge_fundamentals(fmp, yf) if fmp.get("available") else yf
+                result = _merge_fundamentals(av, yf) if av.get("available") else yf
         except Exception as e:
-            print(f"[error] FMP fundamentals failed for {ticker}: {e}, falling back to yfinance")
+            print(
+                f"[error] Alpha Vantage fundamentals failed for {ticker}: {e}, "
+                "falling back to yfinance"
+            )
 
     if result is None:
         try:
@@ -134,108 +164,69 @@ def get_fundamentals(ticker: str) -> dict:
     return result
 
 
-def _fmp_core_metrics_present(data: dict) -> bool:
-    return data.get("available") and data.get("pe_ttm") is not None and data.get("revenue_growth_yoy") is not None
+def _core_metrics_present(data: dict) -> bool:
+    return (
+        data.get("available")
+        and data.get("pe_ttm") is not None
+        and data.get("revenue_growth_yoy") is not None
+    )
 
 
-def _revenue_growth_from_income(income: list) -> float | None:
-    """YoY revenue growth from the two most recent income-statement rows."""
-    if not income or len(income) < 2:
-        return None
-    annual = [row for row in income if (row.get("period") or "").upper() == "FY"]
-    rows = annual if len(annual) >= 2 else income[:2]
-    if len(rows) < 2:
-        return None
-    latest_rev = rows[0].get("revenue")
-    prior_rev = rows[1].get("revenue")
-    if not latest_rev or not prior_rev:
-        return None
-    return latest_rev / prior_rev - 1
-
-
-def _pe_from_fmp_profile(profile: dict) -> float | None:
-    for key in ("pe", "peRatio", "peRatioTTM", "priceEarningsRatioTTM"):
-        val = profile.get(key)
-        if val is not None:
-            return val
-    return None
-
-
-def _pe_from_fmp_profile_and_income(profile: dict, income: list) -> float | None:
-    """P/E from profile fields, or price / EPS derived from income statement."""
-    pe = _pe_from_fmp_profile(profile)
-    if pe is not None:
-        return pe
-    price = profile.get("price")
-    if price is None or not income:
-        return None
-    latest = income[0]
-    eps = latest.get("eps")
-    if eps and eps != 0:
-        return price / eps
-    net_income = latest.get("netIncome")
-    shares = latest.get("weightedAverageShsOut") or latest.get("weightedAverageShsOutDil")
-    if net_income and shares:
-        derived_eps = net_income / shares
-        if derived_eps:
-            return price / derived_eps
-    return None
-
-
-def _merge_fundamentals(fmp: dict, yf: dict) -> dict:
-    """Prefer FMP values where present; fill gaps from yfinance."""
+def _merge_fundamentals(primary: dict, yf: dict) -> dict:
+    """Prefer primary source values where present; fill gaps from yfinance."""
     if not yf.get("available"):
-        return fmp
+        return primary
     merged = dict(yf)
-    for key, val in fmp.items():
+    for key, val in primary.items():
         if val is not None and key not in ("source", "note", "available"):
             merged[key] = val
     merged["available"] = True
     sources: list[str] = []
-    if fmp.get("available"):
-        sources.append("FMP")
+    if primary.get("available"):
+        sources.append(primary.get("source", "Alpha Vantage"))
     if yf.get("available"):
         sources.append("yfinance")
     merged["source"] = "+".join(sources) if len(sources) > 1 else (sources[0] if sources else "unknown")
     return merged
 
 
-def _fundamentals_fmp(ticker: str) -> dict:
-    profile_rows = _fmp_get(f"profile/{ticker}")
-    if not profile_rows or not isinstance(profile_rows, list):
-        raise ValueError(f"FMP profile returned no data for {ticker}")
-    profile = profile_rows[0]
-
-    income = _fmp_get(f"income-statement/{ticker}", {"limit": 2})
-    if not isinstance(income, list):
-        income = []
-
-    rev_growth = _revenue_growth_from_income(income)
-    pe_ttm = _pe_from_fmp_profile_and_income(profile, income)
-
+def _fundamentals_alphavantage(ticker: str) -> dict:
+    overview = _alphavantage_overview(ticker)
     return {
         "available": True,
-        "source": "FMP",
-        "company_name": profile.get("companyName"),
-        "sector": profile.get("sector"),
-        "industry": profile.get("industry"),
-        "market_cap": profile.get("mktCap"),
-        "pe_ttm": pe_ttm,
-        "ev_ebitda": None,
-        "ev_revenue": None,
-        "price_to_book": None,
+        "source": "Alpha Vantage",
+        "company_name": overview.get("Name"),
+        "sector": overview.get("Sector"),
+        "industry": overview.get("Industry"),
+        "market_cap": _av_float(overview.get("MarketCapitalization")),
+        "pe_ttm": _av_float(overview.get("PERatio")),
+        "ev_ebitda": _av_float(overview.get("EVToEBITDA")),
+        "ev_revenue": _av_float(overview.get("EVToRevenue")),
+        "price_to_book": _av_float(overview.get("PriceToBookRatio")),
         "gross_margin": None,
-        "operating_margin": None,
-        "net_margin": None,
-        "roe": None,
+        "operating_margin": _av_float(overview.get("OperatingMarginTTM")),
+        "net_margin": _av_float(overview.get("ProfitMargin")),
+        "roe": _av_float(overview.get("ReturnOnEquityTTM")),
         "roic": None,
-        "debt_to_equity": None,
+        "debt_to_equity": _av_float(overview.get("DebtToEquity")),
         "current_ratio": None,
-        "revenue_growth_yoy": rev_growth,
+        "revenue_growth_yoy": _av_float(overview.get("QuarterlyRevenueGrowthYOY")),
         "fcf_yield": None,
-        "dividend_yield": profile.get("lastDiv"),
+        "dividend_yield": _av_float(overview.get("DividendYield")),
     }
 
+
+def _fmp_get(endpoint: str, params: dict | None = None) -> list | dict:
+    params = params or {}
+    params["apikey"] = config.FMP_API_KEY
+    r = requests.get(f"{FMP_BASE}/{endpoint}", params=params, timeout=20)
+    r.raise_for_status()
+    return r.json()
+
+
+# ---------------------------------------------------------------------------
+# Peers (FMP)
+# ---------------------------------------------------------------------------
 
 def _fundamentals_yfinance(ticker: str) -> dict:
     try:

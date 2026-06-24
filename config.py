@@ -5,18 +5,20 @@ API keys are read from environment variables — never hardcode them.
 Required:
     ANTHROPIC_API_KEY   -> Claude API (AI report generation)
 Optional:
-    FMP_API_KEY         -> Financial Modeling Prep (clean fundamentals, $14/mo plan)
+    ALPHA_VANTAGE_API_KEY -> Alpha Vantage company overview (P/E, revenue growth)
+    FMP_API_KEY         -> Financial Modeling Prep (peers, supplementary analyst data)
     FRED_API_KEY        -> FRED macro data (free, register at fred.stlouisfed.org)
     FINNHUB_API_KEY     -> Finnhub analyst consensus, price targets, EPS estimates (free tier)
     DATABASE_URL        -> PostgreSQL connection string (Supabase/Render); falls back to SQLite
 
-If FMP_API_KEY is missing, the system falls back to yfinance for fundamentals.
+If ALPHA_VANTAGE_API_KEY is missing, the system falls back to yfinance for fundamentals.
 """
 
 import os
 
 # --- API keys (from environment) ---
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ALPHA_VANTAGE_API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY", "")
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
 FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
 FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")
