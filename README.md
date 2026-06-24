@@ -91,6 +91,8 @@ $env:FRED_API_KEY = "..."               # optional — macro context (free at fr
 
 Optional: `$env:PORTFOLIO_DB = "portfolio.db"` to change the SQLite database path.
 
+**Cloud deploy:** see [DEPLOY.md](DEPLOY.md) (Render, Railway, Docker).
+
 ---
 
 ## Usage

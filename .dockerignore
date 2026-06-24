@@ -1,0 +1,11 @@
+__pycache__
+*.pyc
+.git
+.gitignore
+output
+.env
+portfolio.db
+*.db
+.cursor
+*.md
+!README.md
