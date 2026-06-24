@@ -13,6 +13,7 @@ from datetime import datetime
 import schedule
 
 import ai_report
+import alerts
 import config
 import portfolio
 import portfolio_risk
@@ -26,6 +27,7 @@ def _format_weekly_brief_md(
     holdings: list[dict],
     risk: dict,
     brief: str,
+    triggered_alerts: list[dict] | None = None,
 ) -> str:
     """Combine risk analysis and AI brief into a single markdown document."""
     lines = [
@@ -91,6 +93,16 @@ def _format_weekly_brief_md(
             lines.append("</details>")
     lines.append("")
 
+    lines.append("## Triggered Alerts")
+    lines.append("")
+    triggered_alerts = triggered_alerts or []
+    if not triggered_alerts:
+        lines.append("- No alerts triggered.")
+    else:
+        for a in triggered_alerts:
+            lines.append(f"- **{a.get('ticker')}:** {a.get('explanation')}")
+    lines.append("")
+
     lines.append("## AI Weekly Brief")
     lines.append("")
     lines.append(brief)
@@ -117,9 +129,12 @@ def run_weekly_brief() -> dict:
         risk = portfolio_risk.analyze_portfolio_risk(holdings)
         brief = ai_report.generate_portfolio_brief(holdings)
 
+        portfolio_tickers = [h["ticker"] for h in holdings]
+        triggered = alerts.check_alerts(portfolio_tickers)
+
         os.makedirs(config.OUTPUT_DIR, exist_ok=True)
         path = os.path.join(config.OUTPUT_DIR, f"weekly_brief_{date_str}.md")
-        content = _format_weekly_brief_md(date_str, holdings, risk, brief)
+        content = _format_weekly_brief_md(date_str, holdings, risk, brief, triggered)
 
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -131,6 +146,7 @@ def run_weekly_brief() -> dict:
             "date": date_str,
             "holdings_count": len(holdings),
             "risk_available": risk.get("available", False),
+            "triggered_alerts_count": len(triggered),
         }
     except Exception as e:
         note = f"Weekly brief job failed: {e}"

@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 import ai_report
+import alerts
 import main
 import portfolio
 import portfolio_risk
@@ -27,6 +28,13 @@ class PositionInput(BaseModel):
 
 class PortfolioInput(BaseModel):
     positions: list[PositionInput]
+
+
+class AlertInput(BaseModel):
+    ticker: str
+    metric: str
+    operator: str
+    threshold: float
 
 
 @app.get("/report/{ticker}")
@@ -97,3 +105,36 @@ def portfolio_brief():
             "portfolio": [],
             "brief": ai_report._portfolio_brief_template([], reason=str(e)),
         }
+
+
+@app.post("/alerts")
+def create_alert(body: AlertInput):
+    """Add a new alert rule."""
+    try:
+        result = alerts.add_alert(
+            ticker=body.ticker,
+            metric=body.metric,
+            operator=body.operator,
+            threshold=body.threshold,
+        )
+        if result.get("available") is False:
+            return result
+        return {"alert": result}
+    except Exception as e:
+        print(f"[error] API POST /alerts failed: {e}")
+        return {"available": False, "note": str(e)}
+
+
+@app.get("/alerts/check")
+def check_alerts_endpoint():
+    """Check all alert rules against current portfolio data."""
+    try:
+        holdings = portfolio.update_prices()
+        tickers = [h["ticker"] for h in holdings]
+        if not tickers:
+            return {"triggered": [], "count": 0, "note": "No portfolio saved"}
+        triggered = alerts.check_alerts(tickers)
+        return {"triggered": triggered, "count": len(triggered)}
+    except Exception as e:
+        print(f"[error] API GET /alerts/check failed: {e}")
+        return {"triggered": [], "count": 0, "note": str(e)}

@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import sys
 import time
 
 import schedule
@@ -17,6 +18,10 @@ import schedule
 import scheduler as weekly_scheduler
 
 POLL_INTERVAL_SECONDS = 60
+
+# Ensure log lines appear immediately when run as a background process
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
 
 
 def main() -> None:
