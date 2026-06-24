@@ -6,6 +6,7 @@ import logging
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 import ai_report
@@ -21,6 +22,17 @@ app = FastAPI(
     title="Equity Research API",
     description="Single-ticker research pipeline, portfolio tracking, and risk analysis",
     version="1.5",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://equity-research-frontend-lilac.vercel.app",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
