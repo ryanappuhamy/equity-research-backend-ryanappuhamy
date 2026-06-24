@@ -98,44 +98,120 @@ def _fmp_get(endpoint: str, params: dict | None = None) -> list | dict:
 
 def get_fundamentals(ticker: str) -> dict:
     """
-    Key fundamental metrics. Tries FMP first, falls back to yfinance.
-    Returns a flat dict of objective reported/derived metrics.
+    Key fundamental metrics. FMP profile + income statement first for P/E and
+    revenue growth; yfinance only if FMP fails or those fields are empty.
     """
     ticker = ticker.upper()
     cached = market_cache.get_fundamentals(ticker)
     if cached is not None:
         return cached
 
+    result: dict | None = None
     if config.FMP_API_KEY:
         try:
-            result = _fundamentals_fmp(ticker)
-            market_cache.set_fundamentals(ticker, result)
-            return result
+            fmp = _fundamentals_fmp(ticker)
+            if _fmp_core_metrics_present(fmp):
+                result = fmp
+            else:
+                print(
+                    f"[warn] FMP returned empty P/E or revenue growth for {ticker}, "
+                    "falling back to yfinance for missing fields"
+                )
+                yf = _fundamentals_yfinance(ticker)
+                result = _merge_fundamentals(fmp, yf) if fmp.get("available") else yf
         except Exception as e:
             print(f"[error] FMP fundamentals failed for {ticker}: {e}, falling back to yfinance")
-    try:
-        result = _fundamentals_yfinance(ticker)
-        market_cache.set_fundamentals(ticker, result)
-        return result
-    except Exception as e:
-        note = f"Fundamentals collection failed for {ticker}: {e}"
-        print(f"[error] {note}")
-        return {"available": False, "note": note}
+
+    if result is None:
+        try:
+            result = _fundamentals_yfinance(ticker)
+        except Exception as e:
+            note = f"Fundamentals collection failed for {ticker}: {e}"
+            print(f"[error] {note}")
+            return {"available": False, "note": note}
+
+    market_cache.set_fundamentals(ticker, result)
+    return result
+
+
+def _fmp_core_metrics_present(data: dict) -> bool:
+    return data.get("available") and data.get("pe_ttm") is not None and data.get("revenue_growth_yoy") is not None
+
+
+def _revenue_growth_from_income(income: list) -> float | None:
+    """YoY revenue growth from the two most recent income-statement rows."""
+    if not income or len(income) < 2:
+        return None
+    annual = [row for row in income if (row.get("period") or "").upper() == "FY"]
+    rows = annual if len(annual) >= 2 else income[:2]
+    if len(rows) < 2:
+        return None
+    latest_rev = rows[0].get("revenue")
+    prior_rev = rows[1].get("revenue")
+    if not latest_rev or not prior_rev:
+        return None
+    return latest_rev / prior_rev - 1
+
+
+def _pe_from_fmp_profile(profile: dict) -> float | None:
+    for key in ("pe", "peRatio", "peRatioTTM", "priceEarningsRatioTTM"):
+        val = profile.get(key)
+        if val is not None:
+            return val
+    return None
+
+
+def _pe_from_fmp_profile_and_income(profile: dict, income: list) -> float | None:
+    """P/E from profile fields, or price / EPS derived from income statement."""
+    pe = _pe_from_fmp_profile(profile)
+    if pe is not None:
+        return pe
+    price = profile.get("price")
+    if price is None or not income:
+        return None
+    latest = income[0]
+    eps = latest.get("eps")
+    if eps and eps != 0:
+        return price / eps
+    net_income = latest.get("netIncome")
+    shares = latest.get("weightedAverageShsOut") or latest.get("weightedAverageShsOutDil")
+    if net_income and shares:
+        derived_eps = net_income / shares
+        if derived_eps:
+            return price / derived_eps
+    return None
+
+
+def _merge_fundamentals(fmp: dict, yf: dict) -> dict:
+    """Prefer FMP values where present; fill gaps from yfinance."""
+    if not yf.get("available"):
+        return fmp
+    merged = dict(yf)
+    for key, val in fmp.items():
+        if val is not None and key not in ("source", "note", "available"):
+            merged[key] = val
+    merged["available"] = True
+    sources: list[str] = []
+    if fmp.get("available"):
+        sources.append("FMP")
+    if yf.get("available"):
+        sources.append("yfinance")
+    merged["source"] = "+".join(sources) if len(sources) > 1 else (sources[0] if sources else "unknown")
+    return merged
 
 
 def _fundamentals_fmp(ticker: str) -> dict:
-    try:
-        profile = _fmp_get(f"profile/{ticker}")[0]
-        ratios = _fmp_get(f"ratios-ttm/{ticker}")[0]
-        metrics = _fmp_get(f"key-metrics-ttm/{ticker}")[0]
-        income = _fmp_get(f"income-statement/{ticker}", {"limit": 5})
-    except (IndexError, KeyError, TypeError) as e:
-        raise ValueError(f"FMP returned incomplete data for {ticker}: {e}") from e
+    profile_rows = _fmp_get(f"profile/{ticker}")
+    if not profile_rows or not isinstance(profile_rows, list):
+        raise ValueError(f"FMP profile returned no data for {ticker}")
+    profile = profile_rows[0]
 
-    revenue_series = [q.get("revenue") for q in reversed(income)]
-    rev_growth = None
-    if len(revenue_series) >= 2 and revenue_series[-2]:
-        rev_growth = revenue_series[-1] / revenue_series[-2] - 1
+    income = _fmp_get(f"income-statement/{ticker}", {"limit": 2})
+    if not isinstance(income, list):
+        income = []
+
+    rev_growth = _revenue_growth_from_income(income)
+    pe_ttm = _pe_from_fmp_profile_and_income(profile, income)
 
     return {
         "available": True,
@@ -144,20 +220,20 @@ def _fundamentals_fmp(ticker: str) -> dict:
         "sector": profile.get("sector"),
         "industry": profile.get("industry"),
         "market_cap": profile.get("mktCap"),
-        "pe_ttm": ratios.get("peRatioTTM"),
-        "ev_ebitda": metrics.get("enterpriseValueOverEBITDATTM"),
-        "ev_revenue": metrics.get("evToSalesTTM"),
-        "price_to_book": ratios.get("priceToBookRatioTTM"),
-        "gross_margin": ratios.get("grossProfitMarginTTM"),
-        "operating_margin": ratios.get("operatingProfitMarginTTM"),
-        "net_margin": ratios.get("netProfitMarginTTM"),
-        "roe": ratios.get("returnOnEquityTTM"),
-        "roic": metrics.get("roicTTM"),
-        "debt_to_equity": ratios.get("debtEquityRatioTTM"),
-        "current_ratio": ratios.get("currentRatioTTM"),
+        "pe_ttm": pe_ttm,
+        "ev_ebitda": None,
+        "ev_revenue": None,
+        "price_to_book": None,
+        "gross_margin": None,
+        "operating_margin": None,
+        "net_margin": None,
+        "roe": None,
+        "roic": None,
+        "debt_to_equity": None,
+        "current_ratio": None,
         "revenue_growth_yoy": rev_growth,
-        "fcf_yield": metrics.get("freeCashFlowYieldTTM"),
-        "dividend_yield": ratios.get("dividendYielTTM") or ratios.get("dividendYieldTTM"),
+        "fcf_yield": None,
+        "dividend_yield": profile.get("lastDiv"),
     }
 
 
