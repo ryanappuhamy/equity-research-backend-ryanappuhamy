@@ -64,18 +64,24 @@ class AlertInput(BaseModel):
 
 @app.get("/report/{ticker}")
 def get_report(ticker: str, peers: Optional[str] = None):
-    """Run the full single-ticker pipeline and return JSON."""
-    manual_peers = [p.strip() for p in peers.split(",") if p.strip()] if peers else None
+    """Run the full single-ticker pipeline and return JSON (cached 24h)."""
+    ticker = ticker.upper()
+    manual_peers = [p.strip().upper() for p in peers.split(",") if p.strip()] if peers else None
     try:
+        cached = market_cache.get_report(ticker, manual_peers)
+        if cached is not None:
+            return cached
+
         result = main.run_pipeline(ticker, manual_peers=manual_peers, save_files=False)
+        market_cache.set_report(ticker, result, manual_peers)
         return result
     except Exception as e:
         print(f"[error] API /report/{ticker} failed: {e}")
         return {
-            "ticker": ticker.upper(),
+            "ticker": ticker,
             "available": False,
             "note": str(e),
-            "report": ai_report._template_report({"ticker": ticker.upper()}, reason=str(e)),
+            "report": ai_report._template_report({"ticker": ticker}, reason=str(e)),
             "data": {},
         }
 

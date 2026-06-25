@@ -1,7 +1,7 @@
 """
 Cache fundamentals and price data in the shared DB (Supabase / SQLite).
 
-Fundamentals are cached for 24 hours; price data uses a 30-minute TTL;
+Fundamentals and full reports are cached for 24 hours; price data uses a 30-minute TTL;
 weekly portfolio briefs are cached for 7 days.
 """
 
@@ -16,6 +16,7 @@ from database import Base, get_session
 
 PRICE_CACHE_TTL_SECONDS = 30 * 60
 FUNDAMENTALS_CACHE_TTL_SECONDS = 24 * 60 * 60
+REPORT_CACHE_TTL_SECONDS = 24 * 60 * 60
 WEEKLY_BRIEF_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 WEEKLY_BRIEF_TICKER = "_portfolio"
 
@@ -100,6 +101,26 @@ def set_fundamentals(ticker: str, data: dict) -> None:
     if not data.get("available"):
         return
     _set_row(ticker, "fundamentals", json.dumps(data))
+
+
+def _report_cache_key(peers: list[str] | None) -> str:
+    if not peers:
+        return ""
+    return ",".join(sorted(p.upper() for p in peers))
+
+
+def get_report(ticker: str, peers: list[str] | None = None) -> dict | None:
+    row = _get_row(ticker, "report", _report_cache_key(peers))
+    if row and _is_fresh(row.fetched_at, REPORT_CACHE_TTL_SECONDS):
+        try:
+            return json.loads(row.payload)
+        except json.JSONDecodeError as e:
+            print(f"[warn] market cache corrupt report for {ticker}: {e}")
+    return None
+
+
+def set_report(ticker: str, result: dict, peers: list[str] | None = None) -> None:
+    _set_row(ticker, "report", json.dumps(result), _report_cache_key(peers))
 
 
 def get_price_history(ticker: str, years: int) -> pd.DataFrame | None:
