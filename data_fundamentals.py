@@ -123,6 +123,48 @@ def _av_float(val) -> float | None:
         return None
 
 
+def _overview_metric(overview: dict, *keys: str) -> float | None:
+    for key in keys:
+        val = _av_float(overview.get(key))
+        if val is not None:
+            return val
+    return None
+
+
+def _fundamentals_alphavantage(ticker: str) -> dict:
+    overview = _alphavantage_overview(ticker)
+    return {
+        "available": True,
+        "source": "Alpha Vantage",
+        "company_name": overview.get("Name"),
+        "sector": overview.get("Sector"),
+        "industry": overview.get("Industry"),
+        "market_cap": _overview_metric(overview, "MarketCapitalization"),
+        "pe_ttm": _overview_metric(overview, "PERatio"),
+        "forward_pe": _overview_metric(overview, "ForwardPE"),
+        "peg_ratio": _overview_metric(overview, "PEGRatio"),
+        "ev_ebitda": _overview_metric(overview, "EVToEBITDA"),
+        "ev_revenue": _overview_metric(overview, "EVToRevenue"),
+        "price_to_book": _overview_metric(overview, "PriceToBookRatio"),
+        "eps_growth_yoy": _overview_metric(overview, "QuarterlyEarningsGrowthYOY"),
+        "gross_margin": _overview_metric(overview, "GrossProfitTTM"),
+        "operating_margin": _overview_metric(overview, "OperatingMarginTTM"),
+        "net_margin": _overview_metric(overview, "ProfitMargin"),
+        "roe": _overview_metric(overview, "ReturnOnEquityTTM"),
+        "roic": None,
+        "debt_to_equity": _overview_metric(overview, "DebtToEquity"),
+        "current_ratio": _overview_metric(overview, "CurrentRatio"),
+        "revenue_growth_yoy": _overview_metric(overview, "QuarterlyRevenueGrowthYOY"),
+        "revenue_ttm": _overview_metric(overview, "RevenueTTM"),
+        "ebitda_ttm": _overview_metric(overview, "EBITDA"),
+        "net_income_ttm": _overview_metric(overview, "NetIncomeTTM"),
+        "week_52_high": _overview_metric(overview, "52WeekHigh", "FiftyTwoWeekHigh"),
+        "week_52_low": _overview_metric(overview, "52WeekLow", "FiftyTwoWeekLow"),
+        "fcf_yield": None,
+        "dividend_yield": _overview_metric(overview, "DividendYield"),
+    }
+
+
 def get_fundamentals(ticker: str) -> dict:
     """
     Key fundamental metrics. Alpha Vantage OVERVIEW first for P/E and revenue
@@ -202,32 +244,6 @@ def _merge_fundamentals(primary: dict, yf: dict) -> dict:
     return merged
 
 
-def _fundamentals_alphavantage(ticker: str) -> dict:
-    overview = _alphavantage_overview(ticker)
-    return {
-        "available": True,
-        "source": "Alpha Vantage",
-        "company_name": overview.get("Name"),
-        "sector": overview.get("Sector"),
-        "industry": overview.get("Industry"),
-        "market_cap": _av_float(overview.get("MarketCapitalization")),
-        "pe_ttm": _av_float(overview.get("PERatio")),
-        "ev_ebitda": _av_float(overview.get("EVToEBITDA")),
-        "ev_revenue": _av_float(overview.get("EVToRevenue")),
-        "price_to_book": _av_float(overview.get("PriceToBookRatio")),
-        "gross_margin": None,
-        "operating_margin": _av_float(overview.get("OperatingMarginTTM")),
-        "net_margin": _av_float(overview.get("ProfitMargin")),
-        "roe": _av_float(overview.get("ReturnOnEquityTTM")),
-        "roic": None,
-        "debt_to_equity": _av_float(overview.get("DebtToEquity")),
-        "current_ratio": None,
-        "revenue_growth_yoy": _av_float(overview.get("QuarterlyRevenueGrowthYOY")),
-        "fcf_yield": None,
-        "dividend_yield": _av_float(overview.get("DividendYield")),
-    }
-
-
 def _fmp_get(endpoint: str, params: dict | None = None) -> list | dict:
     params = params or {}
     params["apikey"] = config.FMP_API_KEY
@@ -256,9 +272,12 @@ def _fundamentals_yfinance(ticker: str) -> dict:
             "industry": info.get("industry"),
             "market_cap": info.get("marketCap"),
             "pe_ttm": info.get("trailingPE"),
+            "forward_pe": None,
+            "peg_ratio": None,
             "ev_ebitda": info.get("enterpriseToEbitda"),
             "ev_revenue": info.get("enterpriseToRevenue"),
             "price_to_book": info.get("priceToBook"),
+            "eps_growth_yoy": None,
             "gross_margin": info.get("grossMargins"),
             "operating_margin": info.get("operatingMargins"),
             "net_margin": info.get("profitMargins"),
@@ -267,6 +286,11 @@ def _fundamentals_yfinance(ticker: str) -> dict:
             "debt_to_equity": info.get("debtToEquity"),
             "current_ratio": info.get("currentRatio"),
             "revenue_growth_yoy": info.get("revenueGrowth"),
+            "revenue_ttm": None,
+            "ebitda_ttm": None,
+            "net_income_ttm": None,
+            "week_52_high": info.get("fiftyTwoWeekHigh"),
+            "week_52_low": info.get("fiftyTwoWeekLow"),
             "fcf_yield": None,
             "dividend_yield": info.get("dividendYield"),
         }
