@@ -101,6 +101,19 @@ def get_report(ticker: str, peers: Optional[str] = None):
         }
 
 
+@app.delete("/report/{ticker}/cache")
+def delete_report_cache_endpoint(
+    ticker: str,
+    x_force_password: Optional[str] = Header(default=None, alias="X-Force-Password"),
+):
+    """Delete cached report JSON for a ticker from Supabase."""
+    if x_force_password != "ExtraPls":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    ticker = ticker.upper()
+    count = market_cache.delete_report_cache(ticker)
+    return {"deleted": True, "ticker": ticker, "count": count}
+
+
 @app.post("/portfolio")
 def save_portfolio(body: PortfolioInput):
     """Save a portfolio to the database (replaces existing default portfolio)."""

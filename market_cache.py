@@ -123,6 +123,23 @@ def set_report(ticker: str, result: dict, peers: list[str] | None = None) -> Non
     _set_row(ticker, "report", json.dumps(result), _report_cache_key(peers))
 
 
+def delete_report_cache(ticker: str) -> int:
+    """Delete all cached report rows for a ticker (any peers cache_key)."""
+    try:
+        ticker = ticker.upper()
+        with get_session() as db:
+            count = (
+                db.query(MarketDataCache)
+                .filter_by(ticker=ticker, data_type="report")
+                .delete()
+            )
+            db.commit()
+            return count
+    except Exception as e:
+        print(f"[warn] report cache delete failed for {ticker}: {e}")
+        return 0
+
+
 def get_price_history(ticker: str, years: int) -> pd.DataFrame | None:
     cache_key = f"{years}y"
     row = _get_row(ticker, "price_history", cache_key)
