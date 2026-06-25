@@ -16,6 +16,7 @@ import portfolio
 import portfolio_risk
 import market_cache
 from database import init_db
+from yfinance_client import yf_last_price
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,20 @@ class AlertInput(BaseModel):
     threshold: float
 
 
+def _inject_live_price(ticker: str, report: dict) -> dict:
+    """Refresh last_price on a cached report without re-running the pipeline."""
+    try:
+        live = round(float(yf_last_price(ticker)), 2)
+        data = report.setdefault("data", {})
+        price_stats = dict(data.get("price_stats") or {})
+        price_stats["last_price"] = live
+        price_stats["available"] = True
+        data["price_stats"] = price_stats
+    except Exception as e:
+        print(f"[warn] live price injection failed for {ticker}: {e}")
+    return report
+
+
 @app.get("/report/{ticker}")
 def get_report(ticker: str, peers: Optional[str] = None):
     """Run the full single-ticker pipeline and return JSON (cached 24h)."""
@@ -70,7 +85,7 @@ def get_report(ticker: str, peers: Optional[str] = None):
     try:
         cached = market_cache.get_report(ticker, manual_peers)
         if cached is not None:
-            return cached
+            return _inject_live_price(ticker, cached)
 
         result = main.run_pipeline(ticker, manual_peers=manual_peers, save_files=False)
         market_cache.set_report(ticker, result, manual_peers)
