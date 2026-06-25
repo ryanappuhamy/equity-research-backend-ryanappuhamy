@@ -2,7 +2,7 @@
 User-defined alert rules — PostgreSQL (Supabase) or SQLite storage and condition checking.
 
 Alerts fire when a metric crosses a threshold for tickers in the portfolio.
-check_alerts runs the full research pipeline per ticker to collect current data.
+Price alerts use a single yfinance live-price fetch; other metrics use the pipeline.
 """
 
 from datetime import datetime, timezone
@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from database import Base, get_session
 import main
+from yfinance_client import yf_last_price
 
 VALID_METRICS = frozenset({"pe_ttm", "price", "revenue_growth_yoy", "insider_filings"})
 VALID_OPERATORS = frozenset({"above", "below"})
@@ -138,6 +139,18 @@ def clear_alerts() -> dict:
         return {"cleared": False, "note": note}
 
 
+def _fetch_live_price(ticker: str) -> float | None:
+    """Current price via yfinance fast_info — no full research pipeline."""
+    try:
+        price = yf_last_price(ticker)
+        if price is None:
+            return None
+        return float(price)
+    except Exception as e:
+        print(f"[error] Alerts: live price fetch failed for {ticker}: {e}")
+        return None
+
+
 def _run_pipeline_for_ticker(ticker: str) -> dict:
     """Run the full single-ticker pipeline and return the data payload."""
     result = main.run_pipeline(ticker, save_files=False)
@@ -198,8 +211,9 @@ def check_alerts(portfolio_tickers: list[str]) -> list[dict]:
     """
     Check all alert rules for portfolio tickers.
 
-    Runs the full pipeline once per unique ticker, evaluates each rule,
-    updates triggered state in the database, and returns fired alerts.
+    Price alerts use a single yfinance live-price fetch per ticker. Other
+    metrics run the full pipeline once per unique ticker. Updates triggered
+    state in the database and returns fired alerts.
     """
     try:
         portfolio_set = {t.upper() for t in portfolio_tickers}
@@ -209,16 +223,24 @@ def check_alerts(portfolio_tickers: list[str]) -> list[dict]:
         if not relevant:
             return []
 
+        price_cache: dict[str, float | None] = {}
         pipeline_cache: dict[str, dict] = {}
         triggered: list[dict] = []
 
         for rule in relevant:
             ticker = rule["ticker"]
-            if ticker not in pipeline_cache:
-                print(f"Alerts: running pipeline for {ticker}")
-                pipeline_cache[ticker] = _run_pipeline_for_ticker(ticker)
+            metric = rule["metric"]
 
-            value = _extract_metric(rule["metric"], pipeline_cache[ticker])
+            if metric == "price":
+                if ticker not in price_cache:
+                    print(f"Alerts: fetching live price for {ticker}")
+                    price_cache[ticker] = _fetch_live_price(ticker)
+                value = price_cache[ticker]
+            else:
+                if ticker not in pipeline_cache:
+                    print(f"Alerts: running pipeline for {ticker}")
+                    pipeline_cache[ticker] = _run_pipeline_for_ticker(ticker)
+                value = _extract_metric(metric, pipeline_cache[ticker])
             if value is None:
                 print(
                     f"[error] Alerts: no data for {ticker} metric {rule['metric']} — skipping rule {rule['id']}"

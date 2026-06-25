@@ -46,3 +46,7 @@ def yf_ticker_info(ticker: str) -> dict:
 
 def yf_analyst_price_targets(ticker: str) -> dict | None:
     return yf_call(lambda: yf.Ticker(ticker.upper()).analyst_price_targets)
+
+
+def yf_last_price(ticker: str) -> float:
+    return float(yf_call(lambda: yf.Ticker(ticker.upper()).fast_info.last_price))
