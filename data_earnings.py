@@ -11,6 +11,7 @@ from html import unescape
 import requests
 from requests.exceptions import RequestException, Timeout
 
+import market_cache
 from data_sec import _get_cik, SEC_HEADERS
 
 ARCHIVES_BASE = "https://www.sec.gov/Archives/edgar/data"
@@ -115,6 +116,18 @@ def get_earnings_transcript(ticker: str, max_filings: int = 40) -> dict:
 
     Returns dict with cleaned text and filing metadata, or available=False.
     """
+    ticker = ticker.upper()
+    cache_key = f"max{max_filings}"
+    cached = market_cache.get_earnings_transcript(ticker, cache_key)
+    if cached is not None:
+        return cached
+
+    result = _fetch_earnings_transcript(ticker, max_filings)
+    market_cache.set_earnings_transcript(ticker, result, cache_key)
+    return result
+
+
+def _fetch_earnings_transcript(ticker: str, max_filings: int) -> dict:
     try:
         cik = _get_cik(ticker)
         if cik is None:

@@ -352,6 +352,17 @@ def get_analyst_consensus(ticker: str) -> dict:
     if not config.FINNHUB_API_KEY:
         return {"available": False, "note": "Set FINNHUB_API_KEY for analyst consensus"}
 
+    ticker = ticker.upper()
+    cached = market_cache.get_analyst_consensus(ticker)
+    if cached is not None:
+        return cached
+
+    result = _fetch_analyst_consensus(ticker)
+    market_cache.set_analyst_consensus(ticker, result)
+    return result
+
+
+def _fetch_analyst_consensus(ticker: str) -> dict:
     try:
         client = _finnhub_client()
         if client is None:

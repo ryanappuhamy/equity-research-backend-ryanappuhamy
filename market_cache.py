@@ -1,8 +1,9 @@
 """
 Cache fundamentals and price data in the shared DB (Supabase / SQLite).
 
-Fundamentals and full reports are cached for 24 hours; price data uses a 30-minute TTL;
-weekly portfolio briefs are cached for 7 days.
+Fundamentals, reports, SEC insider activity, Finnhub consensus, and FRED macro
+are cached for 24 hours; earnings transcripts for 7 days; price data for 30 minutes;
+weekly portfolio briefs for 7 days.
 """
 
 import json
@@ -18,7 +19,12 @@ PRICE_CACHE_TTL_SECONDS = 30 * 60
 FUNDAMENTALS_CACHE_TTL_SECONDS = 24 * 60 * 60
 REPORT_CACHE_TTL_SECONDS = 24 * 60 * 60
 WEEKLY_BRIEF_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
+INSIDER_ACTIVITY_CACHE_TTL_SECONDS = 24 * 60 * 60
+ANALYST_CONSENSUS_CACHE_TTL_SECONDS = 24 * 60 * 60
+EARNINGS_TRANSCRIPT_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
+MACRO_DATA_CACHE_TTL_SECONDS = 24 * 60 * 60
 WEEKLY_BRIEF_TICKER = "_portfolio"
+GLOBAL_CACHE_TICKER = "_global"
 
 
 class MarketDataCache(Base):
@@ -101,6 +107,59 @@ def set_fundamentals(ticker: str, data: dict) -> None:
     if not data.get("available"):
         return
     _set_row(ticker, "fundamentals", json.dumps(data))
+
+
+def _get_json_cache(
+    ticker: str,
+    data_type: str,
+    ttl_seconds: int,
+    cache_key: str = "",
+) -> dict | None:
+    row = _get_row(ticker, data_type, cache_key)
+    if row and _is_fresh(row.fetched_at, ttl_seconds):
+        try:
+            return json.loads(row.payload)
+        except json.JSONDecodeError as e:
+            print(f"[warn] market cache corrupt {data_type} for {ticker}: {e}")
+    return None
+
+
+def _set_json_cache(ticker: str, data_type: str, data: dict, cache_key: str = "") -> None:
+    _set_row(ticker, data_type, json.dumps(data), cache_key)
+
+
+def get_insider_activity(ticker: str, cache_key: str = "") -> dict | None:
+    return _get_json_cache(ticker, "insider_activity", INSIDER_ACTIVITY_CACHE_TTL_SECONDS, cache_key)
+
+
+def set_insider_activity(ticker: str, data: dict, cache_key: str = "") -> None:
+    _set_json_cache(ticker, "insider_activity", data, cache_key)
+
+
+def get_analyst_consensus(ticker: str) -> dict | None:
+    return _get_json_cache(ticker, "analyst_consensus", ANALYST_CONSENSUS_CACHE_TTL_SECONDS)
+
+
+def set_analyst_consensus(ticker: str, data: dict) -> None:
+    _set_json_cache(ticker, "analyst_consensus", data)
+
+
+def get_earnings_transcript(ticker: str, cache_key: str = "") -> dict | None:
+    return _get_json_cache(
+        ticker, "earnings_transcript", EARNINGS_TRANSCRIPT_CACHE_TTL_SECONDS, cache_key
+    )
+
+
+def set_earnings_transcript(ticker: str, data: dict, cache_key: str = "") -> None:
+    _set_json_cache(ticker, "earnings_transcript", data, cache_key)
+
+
+def get_macro_data() -> dict | None:
+    return _get_json_cache(GLOBAL_CACHE_TICKER, "macro_data", MACRO_DATA_CACHE_TTL_SECONDS)
+
+
+def set_macro_data(data: dict) -> None:
+    _set_json_cache(GLOBAL_CACHE_TICKER, "macro_data", data)
 
 
 def _report_cache_key(peers: list[str] | None) -> str:

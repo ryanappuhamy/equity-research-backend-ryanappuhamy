@@ -9,6 +9,7 @@ import requests
 from requests.exceptions import RequestException, Timeout
 
 import config
+import market_cache
 
 FRED_BASE = "https://api.stlouisfed.org/fred/series/observations"
 
@@ -81,6 +82,16 @@ def get_macro_context() -> dict:
     if not config.FRED_API_KEY:
         return {"available": False, "note": "Set FRED_API_KEY for macro context (free)"}
 
+    cached = market_cache.get_macro_data()
+    if cached is not None:
+        return cached
+
+    result = _fetch_macro_context()
+    market_cache.set_macro_data(result)
+    return result
+
+
+def _fetch_macro_context() -> dict:
     try:
         cpi = _fred_yoy(config.FRED_SERIES["cpi_yoy"])
         result = {

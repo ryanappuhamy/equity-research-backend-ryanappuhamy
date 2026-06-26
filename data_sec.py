@@ -12,6 +12,8 @@ import requests
 from datetime import datetime, timedelta
 from requests.exceptions import RequestException, Timeout
 
+import market_cache
+
 SEC_HEADERS = {
     # SEC requires identification. Replace with your real contact.
     "User-Agent": "EquityResearchProject contact@example.com"
@@ -48,6 +50,18 @@ def get_insider_activity(ticker: str, months_back: int = 6) -> dict:
     For full transaction parsing (buy vs sell amounts), extend with
     the form 4 XML parser; kept simple in v1.
     """
+    ticker = ticker.upper()
+    cache_key = f"{months_back}m"
+    cached = market_cache.get_insider_activity(ticker, cache_key)
+    if cached is not None:
+        return cached
+
+    result = _fetch_insider_activity(ticker, months_back)
+    market_cache.set_insider_activity(ticker, result, cache_key)
+    return result
+
+
+def _fetch_insider_activity(ticker: str, months_back: int) -> dict:
     try:
         cik = _get_cik(ticker)
         if cik is None:
