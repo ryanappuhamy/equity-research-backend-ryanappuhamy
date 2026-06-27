@@ -2,6 +2,7 @@
 Portfolio historical performance — daily NAV, benchmark comparison, and summary metrics.
 """
 
+import time
 from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
@@ -65,6 +66,46 @@ def _trim_closes(series: pd.Series, start: date, end: date) -> pd.Series | None:
     return trimmed if not trimmed.empty else None
 
 
+def _extract_closes(data: pd.DataFrame, tickers: list[str]) -> dict[str, pd.Series]:
+    closes: dict[str, pd.Series] = {}
+    for ticker in tickers:
+        series = _extract_single_close(data, ticker)
+        if series is not None:
+            closes[ticker] = series
+    return closes
+
+
+def _batch_download_closes(
+    tickers: list[str], start: date, end: date
+) -> dict[str, pd.Series]:
+    """Fetch all tickers in one yfinance request, then trim to the requested window."""
+    if not tickers:
+        return {}
+
+    try:
+        time.sleep(1)
+        data = yf_download(
+            tickers,
+            period=f"{config.PRICE_LOOKBACK_YEARS}y",
+            auto_adjust=True,
+            progress=False,
+            group_by="ticker",
+        )
+        if data.empty:
+            print(f"[warn] yfinance returned empty batch price history for {tickers}")
+            return {}
+
+        trimmed: dict[str, pd.Series] = {}
+        for ticker, series in _extract_closes(data, tickers).items():
+            clipped = _trim_closes(series, start, end)
+            if clipped is not None:
+                trimmed[ticker] = clipped
+        return trimmed
+    except Exception as e:
+        print(f"[warn] yfinance batch price history failed for {tickers}: {e}")
+        return {}
+
+
 def _closes_from_cache(ticker: str, start: date, end: date) -> pd.Series | None:
     df = market_cache.get_price_history_stale(ticker, config.PRICE_LOOKBACK_YEARS)
     if df is None or df.empty or "Close" not in df.columns:
@@ -72,59 +113,42 @@ def _closes_from_cache(ticker: str, start: date, end: date) -> pd.Series | None:
     return _trim_closes(df["Close"], start, end)
 
 
-def _download_ticker_closes(ticker: str, start: date, end: date) -> pd.Series | None:
-    try:
-        data = yf_download(
-            ticker,
-            start=start.isoformat(),
-            end=(end + timedelta(days=1)).isoformat(),
-            auto_adjust=True,
-            progress=False,
-        )
-        if data.empty:
-            print(f"[warn] yfinance returned empty price history for {ticker}")
-            return None
-        closes = _extract_single_close(data, ticker)
-        return _trim_closes(closes, start, end) if closes is not None else None
-    except Exception as e:
-        print(f"[warn] yfinance price history failed for {ticker}: {e}")
-        return None
-
-
-def _get_ticker_closes(ticker: str, start: date, end: date) -> pd.Series | None:
-    closes = _download_ticker_closes(ticker, start, end)
-    if closes is not None:
-        return closes
-
-    cached = _closes_from_cache(ticker, start, end)
-    if cached is not None:
-        print(f"[info] using cached price history for {ticker} after yfinance failure")
-        return cached
-
-    print(f"[warn] no live or cached price history for {ticker}, skipping")
-    return None
-
-
-def _download_closes(
+def _resolve_closes(
     tickers: list[str], start: date, end: date
 ) -> tuple[pd.DataFrame, list[str]]:
-    """Download each ticker independently; fall back to cache; skip remaining failures."""
+    """Batch yfinance download with per-ticker cache fallback for gaps."""
     if not tickers:
         return pd.DataFrame(), []
 
+    batch = _batch_download_closes(tickers, start, end)
     closes: dict[str, pd.Series] = {}
     missing: list[str] = []
+
     for ticker in tickers:
-        series = _get_ticker_closes(ticker, start, end)
-        if series is None:
-            missing.append(ticker)
-        else:
+        series = batch.get(ticker)
+        if series is not None:
             closes[ticker] = series
+            continue
+
+        cached = _closes_from_cache(ticker, start, end)
+        if cached is not None:
+            print(f"[info] using cached price history for {ticker} after yfinance gap")
+            closes[ticker] = cached
+            continue
+
+        print(f"[warn] no live or cached price history for {ticker}, skipping")
+        missing.append(ticker)
 
     if not closes:
         return pd.DataFrame(), missing
 
     return pd.DataFrame(closes).sort_index(), missing
+
+
+def _download_closes(
+    tickers: list[str], start: date, end: date
+) -> tuple[pd.DataFrame, list[str]]:
+    return _resolve_closes(tickers, start, end)
 
 
 def _merge_series(nav: pd.Series, benchmark: pd.Series | None) -> list[dict]:
@@ -205,7 +229,9 @@ def compute_portfolio_performance(
     start = _start_date(positions)
     end = datetime.now(timezone.utc).date()
 
-    prices, missing_holdings = _download_closes(tickers, start, end)
+    all_tickers = list(dict.fromkeys(tickers + [benchmark]))
+    prices, missing = _download_closes(all_tickers, start, end)
+    missing_holdings = [t for t in tickers if t in missing]
     valid = [t for t in tickers if t in prices.columns]
     if not valid:
         note = "No price history for portfolio tickers"
@@ -219,15 +245,15 @@ def compute_portfolio_performance(
     if len(nav) < 2:
         return {"available": False, "note": "Insufficient NAV history"}
 
-    benchmark_closes = _get_ticker_closes(benchmark, start, end)
     missing_tickers = list(missing_holdings)
     benchmark_normalized = None
     benchmark_note = None
 
-    if benchmark_closes is None:
+    if benchmark not in prices.columns:
         missing_tickers.append(benchmark)
         benchmark_note = f"{benchmark} benchmark unavailable"
     else:
+        benchmark_closes = prices[benchmark]
         benchmark_prices = benchmark_closes.reindex(nav.index).ffill()
         if benchmark_prices.isna().any():
             missing_tickers.append(benchmark)
