@@ -244,6 +244,8 @@ def _fallback_report(payload: dict) -> str:
     return _template_report(payload)
 
 
+TRANSCRIPT_MAX_CHARS = 8000
+
 TRANSCRIPT_SYSTEM = """You are an equity research analyst reviewing an earnings call transcript.
 Extract structured insights from the transcript only. Do not invent information not present in the text.
 Return valid JSON matching the requested schema exactly."""
@@ -258,7 +260,7 @@ Extract:
 
 Return ONLY a JSON object with those keys.
 
-TRANSCRIPT:
+{truncation_note}TRANSCRIPT:
 {transcript}
 """
 
@@ -312,6 +314,13 @@ def _parse_json_response(text: str) -> dict:
     return json.loads(text.strip())
 
 
+def _truncate_transcript(text: str) -> tuple[str, bool]:
+    stripped = text.strip()
+    if len(stripped) <= TRANSCRIPT_MAX_CHARS:
+        return stripped, False
+    return stripped[:TRANSCRIPT_MAX_CHARS], True
+
+
 def analyze_transcript(transcript_text: str, ticker: str) -> dict:
     """
     Extract guidance, risks, sentiment, and top quotes from an earnings transcript.
@@ -323,13 +332,23 @@ def analyze_transcript(transcript_text: str, ticker: str) -> dict:
             print(f"[error] {note} for {ticker}")
             return {"available": False, "note": note}
 
-        truncated = transcript_text[:120_000]
+        truncated, was_truncated = _truncate_transcript(transcript_text)
         if not config.ANTHROPIC_API_KEY:
             note = "ANTHROPIC_API_KEY not set — transcript collected but not analyzed"
             print(f"[error] Claude API: {note}")
             return {"available": False, "note": note, "char_count": len(transcript_text)}
 
-        prompt = TRANSCRIPT_PROMPT.format(ticker=ticker.upper(), transcript=truncated)
+        truncation_note = (
+            "Note: The transcript below has been truncated for brevity; "
+            "analyze only the excerpt provided.\n\n"
+            if was_truncated
+            else ""
+        )
+        prompt = TRANSCRIPT_PROMPT.format(
+            ticker=ticker.upper(),
+            truncation_note=truncation_note,
+            transcript=truncated,
+        )
         raw = _call_claude(TRANSCRIPT_SYSTEM, prompt, max_tokens=1500)
         if not raw:
             note = "Claude API call failed for transcript analysis"
