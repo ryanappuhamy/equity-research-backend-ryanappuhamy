@@ -1,61 +1,86 @@
 # Changelog — Equity Research Platform
 
-## 2026-05-21
-- Progetto concepito: idea iniziale di piattaforma equity research
-- Scelta stack: Python backend + Next.js frontend + Supabase
+## 2026-05-21 — Project Conception
+- Initial idea for equity research platform
+- Stack selection: Python/FastAPI backend + Next.js frontend + Supabase
+- Identified SEC EDGAR as key differentiator (free, primary institutional source)
 
-## 2026-06-24 (Parte 1 — Backend)
+## 2026-06-24 — Backend Foundation
 - Built complete FastAPI backend from scratch
 - 7-step modular data pipeline:
-  - Price & stats (yfinance)
-  - Fundamentals (yfinance + FMP fallback)
-  - Peer comparison
-  - SEC EDGAR insider activity (Form 4)
-  - Earnings call transcripts (8-K EX-99)
-  - Analyst consensus (Finnhub)
-  - AI report generation (Claude API)
-- Deployed backend to Render
+  1. Price & stats (yfinance)
+  2. Fundamentals (yfinance + FMP fallback)
+  3. Peer comparison
+  4. SEC EDGAR insider activity (Form 4, free)
+  5. Earnings call transcripts (8-K EX-99 from SEC EDGAR, free)
+  6. Analyst consensus + macro context (Finnhub + FRED)
+  7. AI report generation (Claude Sonnet 4.6)
+- 9 FastAPI endpoints live and tested
+- Portfolio tracker with Supabase Postgres
+- Price alert system with threshold logic
+- Scenario analysis (market -20%, rates +100bps)
+- Risk contribution per position
 - Migrated from SQLite to Supabase Postgres (Session Pooler)
 - Added CORS middleware for Vercel frontend
-- All 9 endpoints live and tested
+- Integrated Finnhub for analyst consensus (free tier)
+- Deployed backend to Render
 
-## 2026-06-24 (Parte 2 — Frontend)
-- Frontend (Next.js) pushed to Vercel by collaborator Dilan
-- Added Finnhub for analyst consensus
-- Fixed missing endpoints (GET /alerts, DELETE /alerts/{id}, GET /portfolio)
+## 2026-06-24 — Frontend Base & Deployment
+- Dilan provided base Next.js frontend structure as starting point:
+  dark fintech layout, card shapes, sidebar navigation
+- Deployed frontend to Vercel
+- Negotiated 30% student discount with FMP
 
-## 2026-06-25 (Parte 3 — Wiring & Features)
-- Wired Research Report page to live backend (removed demo data)
+## 2026-06-25 — Frontend Wiring
+- Wired all 4 screens to live backend, removed all hardcoded demo data:
+  Research Report, Portfolio, Weekly Brief, Alerts
+- Added add/remove positions form in Portfolio
+- Fixed decimal separator (comma/period) in Portfolio form
+- Fixed alert trigger logic (was showing "Within threshold" incorrectly)
+- Fixed alert check: lightweight price fetch instead of full pipeline
+  (response time from minutes to <1 second)
+
+## 2026-06-25 — Data Layer & Caching
 - Added Alpha Vantage as primary fundamentals source
-- Implemented exponential backoff on yfinance (2s/4s/8s)
-- Added Supabase cache layer:
+- Implemented exponential backoff on yfinance (2s/4s/8s, 3 attempts)
+- Added multi-layer Supabase cache:
   - Fundamentals: 24h TTL
   - Price history: 30min TTL
-  - Price live: no cache
-- Extended fundamentals cache to 24h
-- Wired Portfolio page to live backend
-- Added add/remove positions UI in Portfolio
-- Wired Weekly Brief to live backend
-- Wired Alerts page to live backend
-- Fixed alert check to use lightweight price fetch (was running full pipeline)
-- Added Recent Searches chips (localStorage, max 6 tickers)
-- Added full report cache (24h) — repeat lookups instant, zero Anthropic cost
-- Added live price injection on cache hits
-- Added 7-day Weekly Brief cache with password-protected force regeneration (ExtraPls)
+  - Full report: 24h TTL (zero Anthropic cost on repeat lookups)
+  - Weekly Brief: 7 days TTL
+  - SEC EDGAR insider activity: 24h TTL
+  - Finnhub analyst consensus: 24h TTL
+  - SEC EDGAR earnings transcript: 7 days TTL
+  - FRED macro data: 24h TTL
+- Live price injection on cache hits (price always current even from cache)
+- Added password-protected cache invalidation (ExtraPls)
 - Added DELETE /report/{ticker}/cache endpoint
-- Added "Something didn't load correctly? Retry" button with password
-- Added "Did You Know?" finance education cards in loading screen (15-20s per card, 3s delay)
-- Added cold-start warning message in loading screen
-- Redesigned Research Report: 6 metric cards (Price, Valuation, Growth, Profitability, Financial Health, Financials TTM)
-- Redesigned Weekly Brief with react-markdown (tables, colored P&L, warning blockquotes)
-- Added freshness badge ("Cached X hours ago") to Weekly Brief
-- Fixed duplicate title in Weekly Brief
-- Negotiated 30% student discount with FMP
-- Renamed backend repo to equity-research-backend-ryanappuhamy
+- Mapped new Alpha Vantage fields: ForwardPE, PEGRatio, EVToEBITDA,
+  GrossProfitTTM, OperatingMarginTTM, ProfitMargin, DebtToEquity,
+  CurrentRatio, RevenueTTM, EBITDA, 52WeekHigh, 52WeekLow
 
-## 2026-06-26 (Parte 3 continua)
-- Added caching for SEC EDGAR insider activity (24h)
-- Added caching for Finnhub analyst consensus (24h)  
-- Added caching for SEC EDGAR earnings transcript (7 days)
-- Added caching for FRED macro data (24h)
-- Fixed insider activity table rendering in frontend
+## 2026-06-25 — UX & Loading Experience
+- Added Recent Searches with localStorage (max 6 tickers, clickable chips)
+- Added "Did You Know?" finance education cards in loading screen
+  (15-20s per card, 3s initial delay, fade animation, hardcoded — zero API cost)
+- Added cold-start warning message in loading screen
+- Added "Something didn't load correctly? Retry" button with password (ExtraPls)
+
+## 2026-06-25 — Research Report Redesign
+- Redesigned from single P/E card to 6 metric cards:
+  Price, Valuation, Growth, Profitability, Financial Health, Financials TTM
+- Added insider activity table with individual transactions
+  (name, role, Buy/Sell badge, amount, date)
+
+## 2026-06-26 — Weekly Brief Redesign
+- Redesigned with react-markdown (tables, colored P&L, warning blockquotes)
+- Added freshness badge ("Cached X hours ago")
+- Added Regenerate button with password protection (ExtraPls)
+- Fixed duplicate title
+
+## 2026-06-26 — Portfolio Dashboard
+- Added sector allocation donut chart (recharts, zero API cost)
+- Added portfolio performance line chart YTD
+- Added benchmark comparison (SPY/QQQ)
+- Added summary metric cards (Total Value, CAGR, Volatility, Sharpe Ratio)
+- Added PDF download for research reports
