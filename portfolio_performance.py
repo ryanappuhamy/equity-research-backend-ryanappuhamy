@@ -39,40 +39,57 @@ def _start_date(positions: list[dict]) -> date:
     return max(max_lookback, earliest)
 
 
-def _extract_closes(data: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
-    closes: dict[str, pd.Series] = {}
-    for ticker in tickers:
-        try:
-            if isinstance(data.columns, pd.MultiIndex):
-                closes[ticker] = data[ticker]["Close"]
-            else:
-                closes[ticker] = data["Close"]
-        except (KeyError, TypeError) as e:
-            print(f"[warn] yfinance: no close prices for {ticker}: {e}")
-    if not closes:
-        return pd.DataFrame()
-    return pd.DataFrame(closes).sort_index()
+def _extract_single_close(data: pd.DataFrame, ticker: str) -> pd.Series | None:
+    try:
+        if isinstance(data.columns, pd.MultiIndex):
+            close = data[ticker]["Close"]
+        else:
+            close = data["Close"]
+        close = close.dropna()
+        return close if not close.empty else None
+    except (KeyError, TypeError) as e:
+        print(f"[warn] yfinance: no close prices for {ticker}: {e}")
+        return None
 
 
-def _download_closes(tickers: list[str], start: date, end: date) -> pd.DataFrame:
-    if not tickers:
-        return pd.DataFrame()
+def _download_ticker_closes(ticker: str, start: date, end: date) -> pd.Series | None:
     try:
         data = yf_download(
-            tickers,
+            ticker,
             start=start.isoformat(),
             end=(end + timedelta(days=1)).isoformat(),
             auto_adjust=True,
             progress=False,
-            group_by="ticker",
         )
         if data.empty:
-            print(f"[error] yfinance returned empty price history for {tickers}")
-            return pd.DataFrame()
-        return _extract_closes(data, tickers)
+            print(f"[warn] yfinance returned empty price history for {ticker}")
+            return None
+        return _extract_single_close(data, ticker)
     except Exception as e:
-        print(f"[error] yfinance price history failed for {tickers}: {e}")
-        return pd.DataFrame()
+        print(f"[warn] yfinance price history failed for {ticker}, skipping: {e}")
+        return None
+
+
+def _download_closes(
+    tickers: list[str], start: date, end: date
+) -> tuple[pd.DataFrame, list[str]]:
+    """Download each ticker independently; skip failures (e.g. rate limits)."""
+    if not tickers:
+        return pd.DataFrame(), []
+
+    closes: dict[str, pd.Series] = {}
+    missing: list[str] = []
+    for ticker in tickers:
+        series = _download_ticker_closes(ticker, start, end)
+        if series is None:
+            missing.append(ticker)
+        else:
+            closes[ticker] = series
+
+    if not closes:
+        return pd.DataFrame(), missing
+
+    return pd.DataFrame(closes).sort_index(), missing
 
 
 def _merge_series(nav: pd.Series, benchmark: pd.Series) -> list[dict]:
@@ -143,14 +160,24 @@ def compute_portfolio_performance(
     start = _start_date(positions)
     end = datetime.now(timezone.utc).date()
 
-    download_tickers = list(dict.fromkeys(tickers + [benchmark]))
-    prices = _download_closes(download_tickers, start, end)
-    if prices.empty:
-        return {"available": False, "note": "No price history returned for portfolio holdings"}
-
+    prices, missing_holdings = _download_closes(tickers, start, end)
     valid = [t for t in tickers if t in prices.columns]
     if not valid:
-        return {"available": False, "note": "No price history for portfolio tickers"}
+        note = "No price history for portfolio tickers"
+        if missing_holdings:
+            note = f"{note}: {', '.join(sorted(missing_holdings))}"
+        return {"available": False, "note": note, "missing_tickers": sorted(missing_holdings)}
+
+    benchmark_closes = _download_ticker_closes(benchmark, start, end)
+    if benchmark_closes is None:
+        note = f"No {benchmark} benchmark data"
+        if missing_holdings:
+            note = f"{note}; missing holdings: {', '.join(sorted(missing_holdings))}"
+        return {
+            "available": False,
+            "note": note,
+            "missing_tickers": sorted(set(missing_holdings + [benchmark])),
+        }
 
     holding_prices = prices[valid].ffill()
     shares_series = pd.Series({t: shares_map[t] for t in valid})
@@ -158,15 +185,16 @@ def compute_portfolio_performance(
     if len(nav) < 2:
         return {"available": False, "note": "Insufficient NAV history"}
 
-    if benchmark not in prices.columns:
-        return {"available": False, "note": f"No {benchmark} benchmark data"}
-
-    benchmark_prices = prices[benchmark].reindex(nav.index).ffill()
+    benchmark_prices = benchmark_closes.reindex(nav.index).ffill()
     if benchmark_prices.isna().any():
         return {"available": False, "note": f"Incomplete {benchmark} benchmark data"}
 
     benchmark_normalized = benchmark_prices / float(benchmark_prices.iloc[0]) * float(nav.iloc[0])
     metrics = _compute_metrics(nav)
+
+    partial_note = None
+    if missing_holdings:
+        partial_note = f"Partial data — missing price history for: {', '.join(sorted(missing_holdings))}"
 
     result = {
         "available": True,
@@ -177,8 +205,12 @@ def compute_portfolio_performance(
         "benchmark": benchmark,
         "series": _merge_series(nav, benchmark_normalized),
         "metrics": metrics,
+        "partial": bool(missing_holdings),
+        "missing_tickers": sorted(missing_holdings),
         **metrics,
     }
+    if partial_note:
+        result["note"] = partial_note
 
     cache_payload = {k: v for k, v in result.items() if k != "from_cache"}
     market_cache.set_portfolio_performance(positions, cache_payload, benchmark)
