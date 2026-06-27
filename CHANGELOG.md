@@ -79,8 +79,30 @@
 - Fixed duplicate title
 
 ## 2026-06-26 — Portfolio Dashboard
-- Added sector allocation donut chart (recharts, zero API cost)
-- Added portfolio performance line chart YTD
-- Added benchmark comparison (SPY/QQQ)
-- Added summary metric cards (Total Value, CAGR, Volatility, Sharpe Ratio)
-- Added PDF download for research reports
+- Added sector allocation donut chart with hover animation (recharts, zero API cost)
+- Total portfolio value displayed in center of donut
+- Legend with sector name, dollar value, and percentage
+- Sector data fetched directly from yfinance when not in fundamentals cache (TTL: 30 days)
+- Known ETFs (SPY, QQQ, VTI, SOXX) classified automatically without API call
+- Sector strings normalized to title case to avoid duplicates
+
+## 2026-06-26 — Performance vs Benchmark
+- Added new backend endpoint `GET /portfolio/performance?benchmark=SPY`
+- Fetches daily price history for all positions using single yf.download() call
+- Calculates daily NAV, Sharpe ratio, max drawdown, total return
+- Benchmark selector: SPY, QQQ, SOXX, VTI — cached separately per benchmark (24h TTL)
+- Frontend line chart with period selector: 1D, 7D, 1M, 6M, 1Y, 5Y, MAX (client-side filtering, zero extra API calls)
+- Portfolio line in blue, benchmark in muted gray
+
+## 2026-06-26 — Research Report Improvements
+- Rendered AI Research Note with react-markdown (same styling as Weekly Brief)
+- Fixed insider activity to show individual transactions (name, role, Buy/Sell badge, amount, date)
+- Expanded Form 4 parser to include transaction codes A, D, F, M in addition to P and S
+- Added PDF download button for research reports (jsPDF, zero API cost)
+- Truncated earnings transcript to 8000 characters before passing to Claude (reduces cost ~40%)
+
+## 2026-06-26 — Cost Optimization
+- Report cache extended: full report cached 24h (zero Anthropic cost on repeat lookups)
+- Sector cache TTL set to 30 days (changes quarterly at most)
+- Portfolio performance cache TTL set to 7 days
+- Prompt caching considered for future implementation
