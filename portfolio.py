@@ -177,10 +177,12 @@ def get_portfolio(portfolio_name: str = DEFAULT_PORTFOLIO_NAME) -> list[dict]:
 
             tickers = [r.ticker for r in rows]
             prices = _fetch_prices(tickers)
+            sectors = market_cache.get_fundamentals_sectors(tickers)
 
             positions = []
             for row in rows:
                 pos = _position_to_dict(row)
+                pos["sector"] = sectors.get(row.ticker)
                 pos["current_price"] = prices.get(row.ticker)
                 if pos["current_price"] is None:
                     print(f"[error] yfinance: missing current price for {row.ticker}")

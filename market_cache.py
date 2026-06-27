@@ -109,6 +109,35 @@ def set_fundamentals(ticker: str, data: dict) -> None:
     _set_row(ticker, "fundamentals", json.dumps(data))
 
 
+def get_fundamentals_sectors(tickers: list[str]) -> dict[str, str | None]:
+    """Return sector from cached fundamentals payloads (ignores TTL). Missing cache → None."""
+    if not tickers:
+        return {}
+    tickers = [t.upper() for t in tickers]
+    sectors: dict[str, str | None] = {t: None for t in tickers}
+    try:
+        with get_session() as db:
+            rows = (
+                db.query(MarketDataCache)
+                .filter(
+                    MarketDataCache.ticker.in_(tickers),
+                    MarketDataCache.data_type == "fundamentals",
+                    MarketDataCache.cache_key == "",
+                )
+                .all()
+            )
+            for row in rows:
+                try:
+                    payload = json.loads(row.payload)
+                    sector = payload.get("sector")
+                    sectors[row.ticker] = sector if sector else None
+                except json.JSONDecodeError as e:
+                    print(f"[warn] market cache corrupt fundamentals for {row.ticker}: {e}")
+    except Exception as e:
+        print(f"[warn] market cache sector lookup failed: {e}")
+    return sectors
+
+
 def _get_json_cache(
     ticker: str,
     data_type: str,
