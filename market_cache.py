@@ -374,11 +374,11 @@ def _portfolio_holdings_cache_key(holdings: list[dict]) -> str:
     return ",".join(parts) or "empty"
 
 
-def get_portfolio_performance(holdings: list[dict]) -> dict | None:
+def get_portfolio_performance(holdings: list[dict], benchmark: str = "SPY") -> dict | None:
     row = _get_row(
         WEEKLY_BRIEF_TICKER,
         "portfolio_performance",
-        _portfolio_holdings_cache_key(holdings),
+        _portfolio_performance_cache_key(holdings, benchmark),
     )
     if row and _is_fresh(row.fetched_at, PORTFOLIO_PERFORMANCE_CACHE_TTL_SECONDS):
         try:
@@ -388,12 +388,20 @@ def get_portfolio_performance(holdings: list[dict]) -> dict | None:
     return None
 
 
-def set_portfolio_performance(holdings: list[dict], data: dict) -> None:
+def set_portfolio_performance(
+    holdings: list[dict],
+    data: dict,
+    benchmark: str = "SPY",
+) -> None:
     if not data.get("available"):
         return
     _set_row(
         WEEKLY_BRIEF_TICKER,
         "portfolio_performance",
         json.dumps(data),
-        _portfolio_holdings_cache_key(holdings),
+        _portfolio_performance_cache_key(holdings, benchmark),
     )
+
+
+def _portfolio_performance_cache_key(holdings: list[dict], benchmark: str) -> str:
+    return f"{_portfolio_holdings_cache_key(holdings)}|{benchmark.upper()}"

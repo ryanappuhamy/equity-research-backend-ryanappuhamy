@@ -5,7 +5,7 @@ FastAPI wrapper for the equity research backend.
 import logging
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -160,10 +160,12 @@ def portfolio_analysis():
 
 
 @app.get("/portfolio/performance")
-def get_portfolio_performance():
-    """Return daily portfolio NAV vs SPY with performance metrics (cached 24h)."""
+def get_portfolio_performance(
+    benchmark: str = Query(default=portfolio_performance.DEFAULT_BENCHMARK),
+):
+    """Return daily portfolio NAV vs benchmark with performance metrics (cached 24h per benchmark)."""
     try:
-        result = portfolio_performance.compute_portfolio_performance()
+        result = portfolio_performance.compute_portfolio_performance(benchmark=benchmark)
         if not result.get("available"):
             raise HTTPException(status_code=404, detail=result.get("note", "No portfolio saved"))
         return result

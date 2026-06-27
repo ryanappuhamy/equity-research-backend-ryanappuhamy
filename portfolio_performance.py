@@ -1,5 +1,5 @@
 """
-Portfolio historical performance — daily NAV, SPY benchmark, and summary metrics.
+Portfolio historical performance — daily NAV, benchmark comparison, and summary metrics.
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -12,7 +12,8 @@ import market_cache
 from portfolio import DEFAULT_PORTFOLIO_NAME, get_position_rows
 from yfinance_client import yf_download
 
-BENCHMARK = "SPY"
+DEFAULT_BENCHMARK = "SPY"
+ALLOWED_BENCHMARKS = frozenset({"SPY", "QQQ", "SOXX", "VTI"})
 MAX_LOOKBACK_DAYS = config.PRICE_LOOKBACK_YEARS * 365
 
 
@@ -71,11 +72,15 @@ def _download_closes(tickers: list[str], start: date, end: date) -> pd.DataFrame
         return pd.DataFrame()
 
 
-def _series_to_points(series: pd.Series) -> list[dict]:
+def _merge_series(nav: pd.Series, benchmark: pd.Series) -> list[dict]:
+    merged = pd.DataFrame({"nav": nav, "benchmark": benchmark}).dropna()
     return [
-        {"date": idx.strftime("%Y-%m-%d"), "value": round(float(val), 2)}
-        for idx, val in series.items()
-        if pd.notna(val)
+        {
+            "date": idx.strftime("%Y-%m-%d"),
+            "nav": round(float(row.nav), 2),
+            "benchmark": round(float(row.benchmark), 2),
+        }
+        for idx, row in merged.iterrows()
     ]
 
 
@@ -108,13 +113,23 @@ def _compute_metrics(nav: pd.Series) -> dict:
     }
 
 
-def compute_portfolio_performance(portfolio_name: str = DEFAULT_PORTFOLIO_NAME) -> dict:
-    """Daily NAV vs SPY with Sharpe, max drawdown, and total return."""
+def compute_portfolio_performance(
+    portfolio_name: str = DEFAULT_PORTFOLIO_NAME,
+    benchmark: str = DEFAULT_BENCHMARK,
+) -> dict:
+    """Daily NAV vs a benchmark ETF with Sharpe, max drawdown, and total return."""
+    benchmark = benchmark.strip().upper()
+    if benchmark not in ALLOWED_BENCHMARKS:
+        return {
+            "available": False,
+            "note": f"benchmark must be one of {sorted(ALLOWED_BENCHMARKS)}",
+        }
+
     positions = get_position_rows(portfolio_name)
     if not positions:
         return {"available": False, "note": "No portfolio saved"}
 
-    cached = market_cache.get_portfolio_performance(positions)
+    cached = market_cache.get_portfolio_performance(positions, benchmark)
     if cached is not None:
         result = dict(cached)
         result["from_cache"] = True
@@ -125,7 +140,7 @@ def compute_portfolio_performance(portfolio_name: str = DEFAULT_PORTFOLIO_NAME) 
     start = _start_date(positions)
     end = datetime.now(timezone.utc).date()
 
-    download_tickers = list(dict.fromkeys(tickers + [BENCHMARK]))
+    download_tickers = list(dict.fromkeys(tickers + [benchmark]))
     prices = _download_closes(download_tickers, start, end)
     if prices.empty:
         return {"available": False, "note": "No price history returned for portfolio holdings"}
@@ -140,14 +155,14 @@ def compute_portfolio_performance(portfolio_name: str = DEFAULT_PORTFOLIO_NAME) 
     if len(nav) < 2:
         return {"available": False, "note": "Insufficient NAV history"}
 
-    if BENCHMARK not in prices.columns:
-        return {"available": False, "note": f"No {BENCHMARK} benchmark data"}
+    if benchmark not in prices.columns:
+        return {"available": False, "note": f"No {benchmark} benchmark data"}
 
-    spy = prices[BENCHMARK].reindex(nav.index).ffill()
-    if spy.isna().any():
-        return {"available": False, "note": f"Incomplete {BENCHMARK} benchmark data"}
+    benchmark_prices = prices[benchmark].reindex(nav.index).ffill()
+    if benchmark_prices.isna().any():
+        return {"available": False, "note": f"Incomplete {benchmark} benchmark data"}
 
-    spy_normalized = spy / float(spy.iloc[0]) * float(nav.iloc[0])
+    benchmark_normalized = benchmark_prices / float(benchmark_prices.iloc[0]) * float(nav.iloc[0])
     metrics = _compute_metrics(nav)
 
     result = {
@@ -155,13 +170,13 @@ def compute_portfolio_performance(portfolio_name: str = DEFAULT_PORTFOLIO_NAME) 
         "from_cache": False,
         "start_date": nav.index[0].strftime("%Y-%m-%d"),
         "end_date": nav.index[-1].strftime("%Y-%m-%d"),
-        "benchmark": BENCHMARK,
-        "nav": _series_to_points(nav),
-        "spy": _series_to_points(spy_normalized),
+        "benchmark_ticker": benchmark,
+        "benchmark": benchmark,
+        "series": _merge_series(nav, benchmark_normalized),
         "metrics": metrics,
         **metrics,
     }
 
     cache_payload = {k: v for k, v in result.items() if k != "from_cache"}
-    market_cache.set_portfolio_performance(positions, cache_payload)
+    market_cache.set_portfolio_performance(positions, cache_payload, benchmark)
     return result
