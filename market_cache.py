@@ -3,7 +3,7 @@ Cache fundamentals and price data in the shared DB (Supabase / SQLite).
 
 Fundamentals, reports, SEC insider activity, Finnhub consensus, and FRED macro
 are cached for 24 hours; earnings transcripts for 7 days; price data for 30 minutes;
-weekly portfolio briefs for 7 days; sector lookups for 30 days.
+weekly portfolio briefs for 7 days; sector lookups for 30 days; portfolio performance for 24 hours.
 """
 
 import json
@@ -24,6 +24,7 @@ ANALYST_CONSENSUS_CACHE_TTL_SECONDS = 24 * 60 * 60
 EARNINGS_TRANSCRIPT_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 MACRO_DATA_CACHE_TTL_SECONDS = 24 * 60 * 60
 SECTOR_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
+PORTFOLIO_PERFORMANCE_CACHE_TTL_SECONDS = 24 * 60 * 60
 WEEKLY_BRIEF_TICKER = "_portfolio"
 GLOBAL_CACHE_TICKER = "_global"
 
@@ -362,4 +363,37 @@ def set_weekly_brief(holdings: list[dict], brief: str) -> None:
         "weekly_brief",
         json.dumps({"brief": brief}),
         _portfolio_brief_cache_key(holdings),
+    )
+
+
+def _portfolio_holdings_cache_key(holdings: list[dict]) -> str:
+    parts = []
+    for h in sorted(holdings, key=lambda x: x["ticker"].upper()):
+        shares = h.get("shares", 0)
+        parts.append(f"{h['ticker'].upper()}:{shares}")
+    return ",".join(parts) or "empty"
+
+
+def get_portfolio_performance(holdings: list[dict]) -> dict | None:
+    row = _get_row(
+        WEEKLY_BRIEF_TICKER,
+        "portfolio_performance",
+        _portfolio_holdings_cache_key(holdings),
+    )
+    if row and _is_fresh(row.fetched_at, PORTFOLIO_PERFORMANCE_CACHE_TTL_SECONDS):
+        try:
+            return json.loads(row.payload)
+        except json.JSONDecodeError as e:
+            print(f"[warn] market cache corrupt portfolio performance: {e}")
+    return None
+
+
+def set_portfolio_performance(holdings: list[dict], data: dict) -> None:
+    if not data.get("available"):
+        return
+    _set_row(
+        WEEKLY_BRIEF_TICKER,
+        "portfolio_performance",
+        json.dumps(data),
+        _portfolio_holdings_cache_key(holdings),
     )

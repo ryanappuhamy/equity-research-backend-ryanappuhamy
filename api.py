@@ -13,6 +13,7 @@ import ai_report
 import alerts
 import main
 import portfolio
+import portfolio_performance
 import portfolio_risk
 import market_cache
 from database import init_db
@@ -156,6 +157,21 @@ def portfolio_analysis():
             "portfolio": [],
             "risk": {"available": False, "note": str(e)},
         }
+
+
+@app.get("/portfolio/performance")
+def get_portfolio_performance():
+    """Return daily portfolio NAV vs SPY with performance metrics (cached 24h)."""
+    try:
+        result = portfolio_performance.compute_portfolio_performance()
+        if not result.get("available"):
+            raise HTTPException(status_code=404, detail=result.get("note", "No portfolio saved"))
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[error] API GET /portfolio/performance failed: {e}")
+        return {"available": False, "note": str(e)}
 
 
 @app.get("/portfolio/brief")

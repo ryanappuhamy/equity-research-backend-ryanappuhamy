@@ -135,6 +135,24 @@ def replace_portfolio(
         return []
 
 
+def get_position_rows(portfolio_name: str = DEFAULT_PORTFOLIO_NAME) -> list[dict]:
+    """Raw position rows for performance and cache keying."""
+    try:
+        with _session() as db:
+            rows = db.query(Position).filter_by(portfolio_name=portfolio_name).all()
+            return [
+                {
+                    "ticker": r.ticker,
+                    "shares": r.shares,
+                    "updated_at": r.updated_at,
+                }
+                for r in rows
+            ]
+    except Exception as e:
+        print(f"[error] Failed to load position rows: {e}")
+        return []
+
+
 def _fetch_prices(tickers: list[str]) -> dict[str, float]:
     if not tickers:
         return {}
