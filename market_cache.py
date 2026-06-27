@@ -109,6 +109,13 @@ def set_fundamentals(ticker: str, data: dict) -> None:
     _set_row(ticker, "fundamentals", json.dumps(data))
 
 
+def _normalize_sector(sector: str | None) -> str | None:
+    if not sector or not isinstance(sector, str):
+        return None
+    sector = sector.strip()
+    return sector.title() if sector else None
+
+
 def get_fundamentals_sectors(tickers: list[str]) -> dict[str, str | None]:
     """Return sector from cached fundamentals payloads (ignores TTL). Missing cache → None."""
     if not tickers:
@@ -129,8 +136,7 @@ def get_fundamentals_sectors(tickers: list[str]) -> dict[str, str | None]:
             for row in rows:
                 try:
                     payload = json.loads(row.payload)
-                    sector = payload.get("sector")
-                    sectors[row.ticker] = sector if sector else None
+                    sectors[row.ticker] = _normalize_sector(payload.get("sector"))
                 except json.JSONDecodeError as e:
                     print(f"[warn] market cache corrupt fundamentals for {row.ticker}: {e}")
     except Exception as e:

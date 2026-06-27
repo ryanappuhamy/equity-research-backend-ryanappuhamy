@@ -15,6 +15,14 @@ from database import Base, get_session
 
 DEFAULT_PORTFOLIO_NAME = "default"
 
+KNOWN_ETF_TICKERS = frozenset({
+    "AGG", "ARKK", "ARKQ", "BND", "DIA", "DVY", "EEM", "EFA", "GLD", "IEF",
+    "IEFA", "IVV", "IWM", "QQQ", "QQQM", "SCHD", "SHY", "SLV", "SMH", "SOXX",
+    "SPY", "TLT", "USO", "VEA", "VTI", "VOO", "VNQ", "VUG", "VTV", "VWO",
+    "VYM", "XLB", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV",
+    "XLY",
+})
+
 
 class Position(Base):
     __tablename__ = "positions"
@@ -177,12 +185,16 @@ def get_portfolio(portfolio_name: str = DEFAULT_PORTFOLIO_NAME) -> list[dict]:
 
             tickers = [r.ticker for r in rows]
             prices = _fetch_prices(tickers)
-            sectors = market_cache.get_fundamentals_sectors(tickers)
+            stock_tickers = [t for t in tickers if t.upper() not in KNOWN_ETF_TICKERS]
+            sectors = market_cache.get_fundamentals_sectors(stock_tickers)
 
             positions = []
             for row in rows:
                 pos = _position_to_dict(row)
-                pos["sector"] = sectors.get(row.ticker)
+                if row.ticker.upper() in KNOWN_ETF_TICKERS:
+                    pos["sector"] = "ETF"
+                else:
+                    pos["sector"] = sectors.get(row.ticker)
                 pos["current_price"] = prices.get(row.ticker)
                 if pos["current_price"] is None:
                     print(f"[error] yfinance: missing current price for {row.ticker}")
