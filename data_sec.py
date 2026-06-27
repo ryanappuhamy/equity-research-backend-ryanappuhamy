@@ -20,6 +20,8 @@ SEC_HEADERS = {
 }
 
 MAX_FILINGS_TO_PARSE = 12
+MAX_TRANSACTIONS = 8
+INCLUDED_TRANSACTION_CODES = frozenset({"P", "S", "A", "D", "F", "M"})
 
 
 def _get_cik(ticker: str) -> str | None:
@@ -91,16 +93,45 @@ def _parse_float(value: str | None) -> float | None:
         return None
 
 
+def _format_shares(shares: float) -> str:
+    if shares == int(shares):
+        return f"{int(shares):,} shares"
+    return f"{shares:,.2f} shares"
+
+
+def _transaction_total_value(tx: ET.Element) -> float | None:
+    for path in (
+        ("value", "value"),
+        ("transactionTotalValue", "value"),
+    ):
+        total = _parse_float(_nested_text(tx, "transactionAmounts", *path))
+        if total is not None and total > 0:
+            return total
+    return None
+
+
 def _action_label(code: str | None, acquired_disposed: str | None) -> str | None:
+    normalized_code = (code or "").upper()
+    if normalized_code not in INCLUDED_TRANSACTION_CODES and acquired_disposed not in {
+        "A",
+        "D",
+    }:
+        return None
+
     if acquired_disposed == "A":
         return "Buy"
     if acquired_disposed == "D":
         return "Sell"
-    if code == "P":
-        return "Buy"
-    if code == "S":
-        return "Sell"
-    return None
+
+    code_labels = {
+        "P": "Buy",
+        "S": "Sell",
+        "A": "Award",
+        "D": "Disposition",
+        "F": "Tax withholding",
+        "M": "Option exercise",
+    }
+    return code_labels.get(normalized_code)
 
 
 def _owner_role(root: ET.Element) -> str:
@@ -179,6 +210,7 @@ def _parse_form4_xml(xml_text: str, filing_date: str) -> list[dict]:
         price = _parse_float(
             _nested_text(tx, "transactionAmounts", "transactionPricePerShare", "value")
         )
+        total_value = _transaction_total_value(tx)
         tx_date = (
             _nested_text(tx, "transactionDate", "value")
             or _nested_text(tx, "deemedExecutionDate", "value")
@@ -186,13 +218,19 @@ def _parse_form4_xml(xml_text: str, filing_date: str) -> list[dict]:
         )
 
         dollar_value = None
-        if shares is not None and price is not None:
+        if shares is not None and price is not None and price > 0:
             dollar_value = round(shares * price, 2)
-        elif shares is not None and price in (None, 0):
-            continue
+        elif total_value is not None:
+            dollar_value = round(total_value, 2)
 
+        amount = None
         if dollar_value is None or dollar_value <= 0:
-            continue
+            if shares is not None and shares > 0:
+                amount = _format_shares(shares)
+            else:
+                continue
+        else:
+            amount = dollar_value
 
         transactions.append(
             {
@@ -200,6 +238,8 @@ def _parse_form4_xml(xml_text: str, filing_date: str) -> list[dict]:
                 "role": role,
                 "action": action,
                 "transaction_type": action,
+                "amount": amount,
+                "shares": shares,
                 "dollar_value": dollar_value,
                 "date": tx_date,
                 "transaction_date": tx_date,
@@ -310,6 +350,7 @@ def _fetch_insider_activity(ticker: str, months_back: int) -> dict:
             key=lambda tx: tx.get("transaction_date") or tx.get("date") or "",
             reverse=True,
         )
+        transactions = transactions[:MAX_TRANSACTIONS]
 
         form4_dates = [filing_date for _, filing_date, _ in form4_filings]
 
@@ -319,8 +360,8 @@ def _fetch_insider_activity(ticker: str, months_back: int) -> dict:
             "most_recent_form4": form4_dates[0] if form4_dates else None,
             "transactions": transactions,
             "note": (
-                "Form 4 = insider transaction filing. Parsed open-market buys (P) "
-                "and sells (S) from recent filings."
+                "Form 4 = insider transaction filing. Includes open-market trades (P/S), "
+                "awards (A), dispositions (D), tax withholding (F), and option exercises (M)."
             ),
         }
     except Timeout:
