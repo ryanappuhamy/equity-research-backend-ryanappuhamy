@@ -3,7 +3,7 @@ Cache fundamentals and price data in the shared DB (Supabase / SQLite).
 
 Fundamentals, reports, SEC insider activity, Finnhub consensus, and FRED macro
 are cached for 24 hours; earnings transcripts for 7 days; price data for 30 minutes;
-weekly portfolio briefs and sector lookups for 7 days.
+weekly portfolio briefs for 7 days; sector lookups for 30 days.
 """
 
 import json
@@ -23,7 +23,7 @@ INSIDER_ACTIVITY_CACHE_TTL_SECONDS = 24 * 60 * 60
 ANALYST_CONSENSUS_CACHE_TTL_SECONDS = 24 * 60 * 60
 EARNINGS_TRANSCRIPT_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 MACRO_DATA_CACHE_TTL_SECONDS = 24 * 60 * 60
-SECTOR_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
+SECTOR_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
 WEEKLY_BRIEF_TICKER = "_portfolio"
 GLOBAL_CACHE_TICKER = "_global"
 
@@ -146,7 +146,7 @@ def get_fundamentals_sectors(tickers: list[str]) -> dict[str, str | None]:
 
 
 def get_sectors(tickers: list[str]) -> dict[str, str | None]:
-    """Return sector from dedicated sector cache rows (7-day TTL). Missing/stale → None."""
+    """Return sector from dedicated sector cache rows (30-day TTL). Missing/stale → None."""
     if not tickers:
         return {}
     tickers = [t.upper() for t in tickers]
