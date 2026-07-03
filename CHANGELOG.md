@@ -109,7 +109,13 @@
 
 ## 2026-07-03 — Root Cause: Alpha Vantage Rate Limiting on Render
 - Diagnosed persistent Alpha Vantage rate limit errors despite low personal usage
-- Root cause identified: Render's free-tier infrastructure uses shared IP addresses across multiple services/users. Alpha Vantage's free tier rate limit (25 requests/day) appears to be enforced per-IP in addition to per-API-key, meaning usage from other services sharing the same Render IP pool can exhaust the daily quota independent of actual calls made by this application
+- Root cause identified: Render's free-tier infrastructure uses shared IP addresses across multiple services/users. Alpha Vantage's free tier rate limit (25 requests/day) appears to be enforced per-IP in addition to per-API-key
 - Verified: direct calls to Alpha Vantage from a personal IP succeed consistently; the same API key called from Render's backend fails with rate-limit errors even when personal daily usage is near zero
-- Added retry logic with 3s delay specifically for Alpha Vantage rate-limit errors before falling back to yfinance (mitigates transient failures but does not solve the shared-IP root cause)
-- This is a structural limitation of the free-tier + free-tier stack combination, not a code defect — reinforces the case for upgrading to FMP Starter (dedicated per-key rate limits, less sensitive to shared infrastructure)
+- Added retry logic with 3s delay specifically for Alpha Vantage rate-limit errors before falling back to yfinance
+- Structural limitation of the free-tier + free-tier stack combination, not a code defect — reinforces the case for upgrading to FMP Starter
+
+## 2026-07-03 — TradingView Integration & Macro Calendar Page
+- Added TradingView Advanced Chart widget on Research Report page (free embed, dark theme, dynamic symbol per ticker, volume + MA(50) + RSI studies)
+- Added TradingView Economic Calendar widget as a standalone "Macro Calendar" page with dedicated sidebar navigation
+- Widgets are display-only (TradingView embeds don't expose data via public API — fundamentals still sourced from Alpha Vantage/yfinance/FMP)
+- Reorganized Research Report layout: metric cards → chart (full width) → insider activity → AI research note
