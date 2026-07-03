@@ -106,3 +106,10 @@
 - Sector cache TTL set to 30 days (changes quarterly at most)
 - Portfolio performance cache TTL set to 7 days
 - Prompt caching considered for future implementation
+
+## 2026-07-03 — Root Cause: Alpha Vantage Rate Limiting on Render
+- Diagnosed persistent Alpha Vantage rate limit errors despite low personal usage
+- Root cause identified: Render's free-tier infrastructure uses shared IP addresses across multiple services/users. Alpha Vantage's free tier rate limit (25 requests/day) appears to be enforced per-IP in addition to per-API-key, meaning usage from other services sharing the same Render IP pool can exhaust the daily quota independent of actual calls made by this application
+- Verified: direct calls to Alpha Vantage from a personal IP succeed consistently; the same API key called from Render's backend fails with rate-limit errors even when personal daily usage is near zero
+- Added retry logic with 3s delay specifically for Alpha Vantage rate-limit errors before falling back to yfinance (mitigates transient failures but does not solve the shared-IP root cause)
+- This is a structural limitation of the free-tier + free-tier stack combination, not a code defect — reinforces the case for upgrading to FMP Starter (dedicated per-key rate limits, less sensitive to shared infrastructure)
