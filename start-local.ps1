@@ -1,6 +1,11 @@
 # Avvio locale del backend Equity Research.
 # Legge le variabili da .env (il codice NON usa python-dotenv, quindi le carichiamo qui),
-# poi lancia uvicorn su http://localhost:8000 con reload, come in produzione su Render.
+# poi lancia uvicorn su http://localhost:8000, come in produzione su Render.
+#
+#   .\start-local.ps1            avvio normale (come Render)
+#   .\start-local.ps1 -Reload    con auto-reload sui cambi di file (dev)
+
+param([switch]$Reload)
 
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
@@ -29,4 +34,6 @@ Get-Content $envFile | ForEach-Object {
 
 $py = Join-Path $PSScriptRoot "venv\Scripts\python.exe"
 Write-Host "`nAvvio backend su http://localhost:8000 (docs: http://localhost:8000/docs)`n"
-& $py -m uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+$uvicornArgs = @("-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000")
+if ($Reload) { $uvicornArgs += "--reload" }
+& $py @uvicornArgs

@@ -18,7 +18,12 @@ Set these environment variables in the platform dashboard:
 | `FINNHUB_API_KEY` | Optional | Analyst consensus |
 | `FMP_API_KEY` | Optional | Fundamentals & peers |
 | `FRED_API_KEY` | Optional | Macro data |
+| `API_SECRET` | Optional | Require `X-API-Key` on all routes. Set the **same value** as `NEXT_PUBLIC_API_SECRET` on Vercel, or the frontend breaks. |
+| `FORCE_PASSWORD` | Optional | Gate for cache-delete / force-regenerate (mirror as `NEXT_PUBLIC_FORCE_PASSWORD` on Vercel). |
+| `RATE_LIMIT_DEFAULT` / `RATE_LIMIT_PIPELINE` | Optional | Per-IP limits (default `120/minute` / `10/minute`). |
 | `PORT` | Auto | Set by Render/Railway |
+
+**Health check path is `/health`** (was `/docs`).
 
 **Note:** SQLite (`portfolio.db`) is ephemeral on free tiers unless you attach persistent storage. Portfolio and alerts reset on redeploy unless you use a persistent disk or external DB.
 

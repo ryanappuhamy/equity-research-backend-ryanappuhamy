@@ -14,6 +14,10 @@ Optional:
     FINNHUB_API_KEY     -> Finnhub analyst consensus, price targets, EPS estimates (free tier)
     DATABASE_URL        -> PostgreSQL connection string (Supabase/Render); falls back to SQLite
     AI_PROVIDER         -> "auto" (default), "anthropic", "gemini", or "none"
+    API_SECRET         -> if set, require header  X-API-Key: <value>  on protected routes
+    FORCE_PASSWORD     -> required by cache-invalidation / force-regenerate routes
+    RATE_LIMIT_DEFAULT -> per-IP limit for all routes (default "120/minute")
+    RATE_LIMIT_PIPELINE-> per-IP limit for expensive pipeline routes (default "10/minute")
 
 If ALPHA_VANTAGE_API_KEY is missing, the system falls back to yfinance for fundamentals.
 """
@@ -27,6 +31,19 @@ ALPHA_VANTAGE_API_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY", "")
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
 FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
 FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")
+
+# --- Security (all opt-in; unset == fully open, e.g. local dev) ---
+# API_SECRET: when set, every route except /health and the docs requires
+#   header  X-API-Key: <API_SECRET>.  Set it on Render AND on the frontend
+#   (NEXT_PUBLIC_API_SECRET) together, or the deployed site breaks.
+# FORCE_PASSWORD: gate for the privileged cache-delete / force-regenerate routes
+#   (replaces the old hardcoded value). Unset -> those routes are disabled.
+API_SECRET = os.environ.get("API_SECRET", "").strip()
+FORCE_PASSWORD = os.environ.get("FORCE_PASSWORD", "").strip()
+
+# Per-IP rate limits (slowapi syntax, e.g. "120/minute", "10/minute")
+RATE_LIMIT_DEFAULT = os.environ.get("RATE_LIMIT_DEFAULT", "120/minute").strip()
+RATE_LIMIT_PIPELINE = os.environ.get("RATE_LIMIT_PIPELINE", "10/minute").strip()
 
 # --- AI provider selection ---
 # "auto"      -> Anthropic if ANTHROPIC_API_KEY is set, else Gemini if

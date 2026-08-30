@@ -9,3 +9,4 @@ sqlalchemy>=2.0
 psycopg2-binary>=2.9
 schedule>=1.2.0
 finnhub-python>=2.4.0
+slowapi>=0.1.9

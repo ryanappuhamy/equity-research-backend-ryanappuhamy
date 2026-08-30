@@ -7,11 +7,12 @@ from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 import config
 import market_cache
 from portfolio import DEFAULT_PORTFOLIO_NAME, get_position_rows
+from ratelimit import limiter
 from yfinance_client import yf_download
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
@@ -296,7 +297,9 @@ def compute_portfolio_performance(
 
 
 @router.get("/performance")
+@limiter.limit(config.RATE_LIMIT_PIPELINE)
 def get_portfolio_performance(
+    request: Request,
     benchmark: str = Query(default=DEFAULT_BENCHMARK),
 ):
     """Return daily portfolio NAV vs benchmark with performance metrics (cached 7 days per benchmark)."""

@@ -1,5 +1,31 @@
 # Changelog — Equity Research Platform
 
+## 2026-08-31 — API hardening (opt-in)
+- **API key gate** (`auth.require_api_key`, global FastAPI dependency): when
+  `API_SECRET` is set, every route except `/health` and the docs requires header
+  `X-API-Key: <secret>`. Unset → API stays fully open (local dev default).
+  - Frontend sends it via `NEXT_PUBLIC_API_SECRET` (visible in the bundle —
+    deters bare-URL/script abuse, not a substitute for per-user auth; that's the
+    future Supabase Auth + RLS work).
+- **Removed hardcoded `"ExtraPls"`** from backend and frontend source. The
+  cache-delete / force-regenerate routes now use `FORCE_PASSWORD` env
+  (`auth.check_force_password`); unset → those routes return 503.
+- **Rate limiting** (`slowapi`, per-IP, in-memory): `RATE_LIMIT_DEFAULT`
+  (120/min) on everything, `RATE_LIMIT_PIPELINE` (10/min) on the expensive
+  routes — `/report/{ticker}`, `/portfolio/brief`, `/portfolio/performance`,
+  `/alerts/check`. 429s carry CORS headers.
+- **CORS**: dropped `allow_credentials=True` (no cookies are used).
+- `/health` endpoint added; `render.yaml` health check moved `/docs` → `/health`.
+- `start-local.ps1`: no `--reload` by default (cleaner process lifecycle on
+  Windows); pass `-Reload` for dev auto-reload.
+- Corrected Gemini model IDs to the 3.x line (`gemini-3.6-flash` →
+  `gemini-3.7-flash` → `gemini-flash-latest`); Google retired the 2.x Flash
+  models for new API keys.
+- New env vars documented in `.env.example`, `README.md`, `DEPLOY.md`,
+  `render.yaml`. Deploying this is safe with the vars unset — the API behaves
+  exactly as before until `API_SECRET` / `FORCE_PASSWORD` are configured on both
+  Render and Vercel.
+
 ## 2026-08-30 — Provider-agnostic AI layer
 - Refactored `ai_report.py` so every model call goes through one `_llm_complete()`
   dispatcher (removed the duplicated inline Anthropic client in `generate_report`)

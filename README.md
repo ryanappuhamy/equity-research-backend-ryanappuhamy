@@ -110,6 +110,20 @@ Optional: `$env:PORTFOLIO_DB = "portfolio.db"` to change the SQLite database pat
 
 **Cloud deploy:** see [DEPLOY.md](DEPLOY.md) (Render, Railway, Docker).
 
+### Securing the API (optional)
+
+The API is open by default. To lock it down in production, set:
+
+| Var | Effect |
+|-----|--------|
+| `API_SECRET` | Every route except `/health` and the docs requires header `X-API-Key: <API_SECRET>`. **Must also be set as `NEXT_PUBLIC_API_SECRET` on the frontend** — set both together or the deployed site can't reach its backend. |
+| `FORCE_PASSWORD` | Required by the cache-delete / force-regenerate routes (replaces the old hardcoded value). Also mirrored as `NEXT_PUBLIC_FORCE_PASSWORD` on the frontend. Unset → those routes are disabled. |
+| `RATE_LIMIT_DEFAULT` / `RATE_LIMIT_PIPELINE` | Per-IP limits (default `120/minute` / `10/minute`); the pipeline limit covers `/report/{ticker}`, `/portfolio/brief`, `/portfolio/performance`, `/alerts/check`. |
+
+`NEXT_PUBLIC_*` values are visible in the browser bundle, so `API_SECRET` deters
+bare-URL and script abuse but is **not** per-user authentication — real
+multi-user auth (Supabase Auth + row-level security) is future work.
+
 ---
 
 ## Usage

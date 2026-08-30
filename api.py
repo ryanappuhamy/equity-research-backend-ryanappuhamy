@@ -5,18 +5,24 @@ FastAPI wrapper for the equity research backend.
 import logging
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 import ai_report
 import alerts
+import auth
+import config
 import main
 import portfolio
 import portfolio_performance
 import portfolio_risk
 import market_cache
 from database import init_db
+from ratelimit import limiter
 from yfinance_client import yf_last_price
 
 logger = logging.getLogger(__name__)
@@ -24,21 +30,33 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Equity Research API",
     description="Single-ticker research pipeline, portfolio tracking, and risk analysis",
-    version="1.5",
+    version="1.6",
+    dependencies=[Depends(auth.require_api_key)],
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Middleware is applied outermost-last, so add SlowAPI first and CORS last —
+# that way rate-limit (429) responses still carry CORS headers for the browser.
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://equity-research-frontend-lilac.vercel.app",
         "http://localhost:3000",
     ],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.include_router(portfolio_performance.router)
+
+
+@app.get("/health")
+def health() -> dict:
+    """Unauthenticated liveness probe (used as the platform health check)."""
+    return {"status": "ok"}
 
 
 @app.on_event("startup")
@@ -81,7 +99,8 @@ def _inject_live_price(ticker: str, report: dict) -> dict:
 
 
 @app.get("/report/{ticker}")
-def get_report(ticker: str, peers: Optional[str] = None):
+@limiter.limit(config.RATE_LIMIT_PIPELINE)
+def get_report(request: Request, ticker: str, peers: Optional[str] = None):
     """Run the full single-ticker pipeline and return JSON (cached 24h)."""
     ticker = ticker.upper()
     manual_peers = [p.strip().upper() for p in peers.split(",") if p.strip()] if peers else None
@@ -110,8 +129,7 @@ def delete_report_cache_endpoint(
     x_force_password: Optional[str] = Header(default=None, alias="X-Force-Password"),
 ):
     """Delete cached report JSON for a ticker from Supabase."""
-    if x_force_password != "ExtraPls":
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    auth.check_force_password(x_force_password)
     ticker = ticker.upper()
     count = market_cache.delete_report_cache(ticker)
     return {"deleted": True, "ticker": ticker, "count": count}
@@ -162,7 +180,9 @@ def portfolio_analysis():
 
 
 @app.get("/portfolio/brief")
+@limiter.limit(config.RATE_LIMIT_PIPELINE)
 def portfolio_brief(
+    request: Request,
     force: bool = False,
     x_force_password: Optional[str] = Header(default=None, alias="X-Force-Password"),
 ):
@@ -172,7 +192,10 @@ def portfolio_brief(
         if not holdings:
             raise HTTPException(status_code=404, detail="No portfolio saved")
 
-        force_bypass = force and x_force_password == "ExtraPls"
+        force_bypass = False
+        if force:
+            auth.check_force_password(x_force_password)
+            force_bypass = True
         cached_brief, fetched_at = market_cache.get_weekly_brief(holdings)
 
         if not market_cache.should_regenerate_weekly_brief(fetched_at, force_bypass):
@@ -245,7 +268,8 @@ def remove_alert(alert_id: int):
 
 
 @app.get("/alerts/check")
-def check_alerts_endpoint():
+@limiter.limit(config.RATE_LIMIT_PIPELINE)
+def check_alerts_endpoint(request: Request):
     """Check all alert rules against current portfolio data."""
     try:
         holdings = portfolio.update_prices()
