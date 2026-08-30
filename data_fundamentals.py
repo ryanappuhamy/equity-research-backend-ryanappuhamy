@@ -17,7 +17,12 @@ from datetime import date
 
 import config
 import market_cache
-from yfinance_client import yf_analyst_price_targets, yf_download, yf_ticker_info
+from yfinance_client import (
+    yf_analyst_price_targets,
+    yf_download,
+    yf_financial_facts,
+    yf_ticker_info,
+)
 
 FMP_BASE = "https://financialmodelingprep.com/api/v3"
 ALPHAVANTAGE_BASE = "https://www.alphavantage.co/query"
@@ -177,6 +182,16 @@ def _overview_metric(overview: dict, *keys: str) -> float | None:
 
 def _fundamentals_alphavantage(ticker: str) -> dict:
     overview = _alphavantage_overview(ticker)
+
+    # Alpha Vantage OVERVIEW gives gross PROFIT (dollars), not a margin.
+    gross_profit = _overview_metric(overview, "GrossProfitTTM")
+    revenue_ttm = _overview_metric(overview, "RevenueTTM")
+    gross_margin = (
+        gross_profit / revenue_ttm
+        if gross_profit is not None and revenue_ttm
+        else None
+    )
+
     return {
         "available": True,
         "source": "Alpha Vantage",
@@ -191,17 +206,18 @@ def _fundamentals_alphavantage(ticker: str) -> dict:
         "ev_revenue": _overview_metric(overview, "EVToRevenue"),
         "price_to_book": _overview_metric(overview, "PriceToBookRatio"),
         "eps_growth_yoy": _overview_metric(overview, "QuarterlyEarningsGrowthYOY"),
-        "gross_margin": _overview_metric(overview, "GrossProfitTTM"),
+        "gross_margin": gross_margin,
         "operating_margin": _overview_metric(overview, "OperatingMarginTTM"),
         "net_margin": _overview_metric(overview, "ProfitMargin"),
         "roe": _overview_metric(overview, "ReturnOnEquityTTM"),
         "roic": None,
-        "debt_to_equity": _overview_metric(overview, "DebtToEquity"),
-        "current_ratio": _overview_metric(overview, "CurrentRatio"),
+        # AV OVERVIEW has no debt/equity, current ratio, or net income — filled from yfinance
+        "debt_to_equity": None,
+        "current_ratio": None,
         "revenue_growth_yoy": _overview_metric(overview, "QuarterlyRevenueGrowthYOY"),
-        "revenue_ttm": _overview_metric(overview, "RevenueTTM"),
+        "revenue_ttm": revenue_ttm,
         "ebitda_ttm": _overview_metric(overview, "EBITDA"),
-        "net_income_ttm": _overview_metric(overview, "NetIncomeTTM"),
+        "net_income_ttm": None,
         "week_52_high": _overview_metric(overview, "52WeekHigh", "FiftyTwoWeekHigh"),
         "week_52_low": _overview_metric(overview, "52WeekLow", "FiftyTwoWeekLow"),
         "fcf_yield": None,
@@ -225,49 +241,60 @@ def get_fundamentals(ticker: str) -> dict:
         )
         return cached
 
-    source = "Alpha Vantage" if av_key_set else "yfinance"
     print(
-        f"[fundamentals] {ticker}: using {source}; "
+        f"[fundamentals] {ticker}: Alpha Vantage primary, yfinance backfill; "
         f"ALPHA_VANTAGE_API_KEY set={av_key_set}"
     )
 
-    result: dict | None = None
+    # yfinance is always fetched: it fills the many fields Alpha Vantage's
+    # OVERVIEW simply doesn't have (debt/equity, current ratio, net income, ...).
+    try:
+        yf = _fundamentals_yfinance(ticker)
+    except Exception as e:
+        print(f"[error] yfinance fundamentals failed for {ticker}: {e}")
+        yf = {"available": False}
+
+    av: dict = {"available": False}
     if config.ALPHA_VANTAGE_API_KEY:
         try:
             av = _fundamentals_alphavantage(ticker)
-            if _core_metrics_present(av):
-                result = av
-            else:
-                print(
-                    f"[warn] Alpha Vantage returned empty P/E or revenue growth for {ticker}, "
-                    "falling back to yfinance for missing fields"
-                )
-                yf = _fundamentals_yfinance(ticker)
-                result = _merge_fundamentals(av, yf) if av.get("available") else yf
         except Exception as e:
-            print(
-                f"[error] Alpha Vantage fundamentals failed for {ticker}: {e}, "
-                "falling back to yfinance"
-            )
+            print(f"[error] Alpha Vantage fundamentals failed for {ticker}: {e}")
 
-    if result is None:
-        try:
-            result = _fundamentals_yfinance(ticker)
-        except Exception as e:
-            note = f"Fundamentals collection failed for {ticker}: {e}"
-            print(f"[error] {note}")
-            return {"available": False, "note": note}
+    if av.get("available") and yf.get("available"):
+        result = _merge_fundamentals(av, yf)
+    elif av.get("available"):
+        result = av
+    elif yf.get("available"):
+        result = yf
+    else:
+        note = f"Fundamentals collection failed for {ticker} (Alpha Vantage + yfinance)"
+        print(f"[error] {note}")
+        return {"available": False, "note": note}
 
+    _apply_financial_facts(result, ticker)
     market_cache.set_fundamentals(ticker, result)
     return result
 
 
-def _core_metrics_present(data: dict) -> bool:
-    return (
-        data.get("available")
-        and data.get("pe_ttm") is not None
-        and data.get("revenue_growth_yoy") is not None
-    )
+def _apply_financial_facts(result: dict, ticker: str) -> None:
+    """Fill TTM levels, YoY changes, forward revenue growth and FCF yield from
+    the yfinance statements (only where the current value is missing)."""
+    facts = yf_financial_facts(ticker)
+    if not facts:
+        return
+
+    for key in (
+        "revenue_ttm", "revenue_yoy", "ebitda_ttm", "ebitda_yoy",
+        "net_income_ttm", "net_income_yoy", "revenue_forward",
+    ):
+        if facts.get(key) is not None and result.get(key) is None:
+            result[key] = facts[key]
+
+    fcf = facts.get("free_cash_flow")
+    mcap = result.get("market_cap")
+    if result.get("fcf_yield") is None and fcf is not None and mcap:
+        result["fcf_yield"] = round(fcf / mcap, 4)
 
 
 def _merge_fundamentals(primary: dict, yf: dict) -> dict:
@@ -308,6 +335,10 @@ def _fundamentals_yfinance(ticker: str) -> dict:
             print(f"[error] {note}")
             return {"available": False, "note": note}
 
+        # yfinance reports debtToEquity as a percentage (e.g. 29.1 = 29.1%)
+        dte = info.get("debtToEquity")
+        earnings_growth = info.get("earningsGrowth")
+
         return {
             "available": True,
             "source": "yfinance",
@@ -316,26 +347,28 @@ def _fundamentals_yfinance(ticker: str) -> dict:
             "industry": info.get("industry"),
             "market_cap": info.get("marketCap"),
             "pe_ttm": info.get("trailingPE"),
-            "forward_pe": None,
-            "peg_ratio": None,
+            "forward_pe": info.get("forwardPE"),
+            "peg_ratio": info.get("trailingPegRatio"),
             "ev_ebitda": info.get("enterpriseToEbitda"),
             "ev_revenue": info.get("enterpriseToRevenue"),
             "price_to_book": info.get("priceToBook"),
-            "eps_growth_yoy": None,
+            "eps_growth_yoy": earnings_growth,
             "gross_margin": info.get("grossMargins"),
             "operating_margin": info.get("operatingMargins"),
             "net_margin": info.get("profitMargins"),
             "roe": info.get("returnOnEquity"),
             "roic": None,
-            "debt_to_equity": info.get("debtToEquity"),
+            "debt_to_equity": dte / 100 if isinstance(dte, (int, float)) else None,
             "current_ratio": info.get("currentRatio"),
             "revenue_growth_yoy": info.get("revenueGrowth"),
-            "revenue_ttm": None,
-            "ebitda_ttm": None,
-            "net_income_ttm": None,
+            "revenue_yoy": info.get("revenueGrowth"),
+            "net_income_yoy": earnings_growth,
+            "revenue_ttm": info.get("totalRevenue"),
+            "ebitda_ttm": info.get("ebitda"),
+            "net_income_ttm": info.get("netIncomeToCommon"),
             "week_52_high": info.get("fiftyTwoWeekHigh"),
             "week_52_low": info.get("fiftyTwoWeekLow"),
-            "fcf_yield": None,
+            "fcf_yield": None,  # computed in get_fundamentals from the cash-flow statement
             "dividend_yield": info.get("dividendYield"),
         }
     except Exception as e:

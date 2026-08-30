@@ -1,5 +1,32 @@
 # Changelog — Equity Research Platform
 
+## 2026-08-31 — Fix perennially-N/A fundamentals
+
+Root cause: Alpha Vantage `OVERVIEW` (the primary source) simply has no
+`DebtToEquity`, `CurrentRatio`, `NetIncomeTTM`, or free-cash-flow field — but the
+code read them as if it did, so whenever AV was the sole source those cards were
+always N/A. It also passed AV's `GrossProfitTTM` (a dollar amount) straight into
+the "Gross Margin" cell, rendering e.g. `22546500800000.0%`.
+
+- `get_fundamentals`: **always** fetch yfinance now and merge it under Alpha
+  Vantage (AV wins where it has a value, yfinance fills the rest). AV-only is no
+  longer a valid final state.
+- `_fundamentals_alphavantage`: gross margin = `GrossProfitTTM / RevenueTTM`;
+  the fields AV lacks are set to `None` explicitly (filled from yfinance).
+- `_fundamentals_yfinance`: map the fields it was dropping — `forward_pe`,
+  `peg_ratio`, `eps_growth_yoy`, `revenue_yoy`, `net_income_yoy`, `revenue_ttm`,
+  `ebitda_ttm`, `net_income_ttm`. `debt_to_equity` normalized from yfinance's
+  percentage form (29.1 → 0.29).
+- New `yfinance_client.yf_financial_facts()` + `_apply_financial_facts()`: pull
+  TTM levels, YoY changes (`ebitda_yoy`, ...), forward revenue growth
+  (`revenue_forward`), and FCF (→ `fcf_yield` = FCF / market cap) from the annual
+  statements / estimates. Fully defensive — any yfinance failure just leaves that
+  field N/A.
+- Verified MSFT + AAPL: Debt/Equity, Current Ratio, FCF Yield, Net Income,
+  EBITDA YoY, Revenue Forward all populate; Gross Margin now 67.9% not a
+  13-digit number.
+- Frontend already reads every one of these fields — no frontend change.
+
 ## 2026-08-31 — Retry / Regenerate: no more password prompt
 - Removed the `window.prompt("Enter password…")` from the Research Report "Retry"
   button and the Weekly Brief "Regenerate" button. The frontend now sends

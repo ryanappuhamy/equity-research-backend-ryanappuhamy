@@ -52,6 +52,73 @@ def yf_last_price(ticker: str) -> float:
     return float(yf_call(lambda: yf.Ticker(ticker.upper()).fast_info.last_price))
 
 
+def yf_financial_facts(ticker: str) -> dict:
+    """
+    TTM levels + YoY changes from the annual statements, plus forward revenue
+    growth. Every key is optional; returns {} if yfinance is unreachable.
+    Keys: revenue_ttm, revenue_yoy, ebitda_ttm, ebitda_yoy, net_income_ttm,
+          net_income_yoy, free_cash_flow, revenue_forward.
+    """
+
+    def _level_and_yoy(df, *names):
+        if df is None or getattr(df, "empty", True):
+            return None, None
+        for name in names:
+            if name in df.index:
+                vals = df.loc[name].dropna()
+                if len(vals) >= 2 and float(vals.iloc[1]) != 0:
+                    cur, prev = float(vals.iloc[0]), float(vals.iloc[1])
+                    return cur, round(cur / prev - 1, 4)
+                if len(vals) >= 1:
+                    return float(vals.iloc[0]), None
+        return None, None
+
+    def _fetch() -> dict:
+        t = yf.Ticker(ticker.upper())
+        out: dict = {}
+
+        try:
+            fin = t.financials
+            rev, rev_yoy = _level_and_yoy(fin, "Total Revenue", "TotalRevenue")
+            ebitda, ebitda_yoy = _level_and_yoy(fin, "EBITDA", "Normalized EBITDA")
+            ni, ni_yoy = _level_and_yoy(
+                fin, "Net Income", "Net Income Common Stockholders", "NetIncome"
+            )
+            for key, val in (
+                ("revenue_ttm", rev), ("revenue_yoy", rev_yoy),
+                ("ebitda_ttm", ebitda), ("ebitda_yoy", ebitda_yoy),
+                ("net_income_ttm", ni), ("net_income_yoy", ni_yoy),
+            ):
+                if val is not None:
+                    out[key] = val
+        except Exception as e:
+            print(f"[warn] yfinance financials for {ticker}: {e}")
+
+        try:
+            fcf, _ = _level_and_yoy(t.cashflow, "Free Cash Flow", "FreeCashFlow")
+            if fcf is not None:
+                out["free_cash_flow"] = fcf
+        except Exception as e:
+            print(f"[warn] yfinance cashflow for {ticker}: {e}")
+
+        try:
+            re = t.revenue_estimate
+            if re is not None and not re.empty and "+1y" in re.index and "growth" in re.columns:
+                g = re.loc["+1y", "growth"]
+                if pd.notna(g):
+                    out["revenue_forward"] = round(float(g), 4)
+        except Exception as e:
+            print(f"[warn] yfinance revenue_estimate for {ticker}: {e}")
+
+        return out
+
+    try:
+        return yf_call(_fetch)
+    except Exception as e:
+        print(f"[error] yfinance financial facts failed for {ticker}: {e}")
+        return {}
+
+
 def yf_ticker_sector(ticker: str) -> str | None:
     """Sector from yfinance fast_info, falling back to info."""
 
