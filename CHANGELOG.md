@@ -1,5 +1,13 @@
 # Changelog — Equity Research Platform
 
+## 2026-08-31 — "Rigenera" button always visible on a report
+
+The Retry button only rendered when a whole data block (`price_stats` or
+`fundamentals`) had `available: false`, so it was effectively invisible. Replaced
+it with a "Rigenera" button in the report header (next to Download PDF), shown on
+every loaded report — one click clears that ticker's cache and re-runs the
+pipeline. A small hint line still appears under the header when some fields are N/A.
+
 ## 2026-08-31 — Report shows the real AI model
 
 The "AI interpretation" badge on the research note was hardcoded to
