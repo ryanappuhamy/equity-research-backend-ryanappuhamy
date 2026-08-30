@@ -12,9 +12,10 @@ Set these environment variables in the platform dashboard:
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `GEMINI_API_KEY` | Optional | AI reports & briefs (free tier; auto-used if no Anthropic key) |
-| `ANTHROPIC_API_KEY` | Optional | AI reports & briefs (paid; takes priority over Gemini) |
-| `AI_PROVIDER` | Optional | `auto` (default) / `anthropic` / `gemini` / `none` |
+| `GEMINI_API_KEY` | Optional | **Primary AI** — reports, transcript analysis, briefs (free) |
+| `OPENAI_COMPAT_API_KEY` | Optional | Free AI fallback (Groq default; `OPENAI_COMPAT_BASE_URL` / `_MODEL` to switch) |
+| `ANTHROPIC_API_KEY` | Optional | Emergency AI fallback only — fires when both free tiers fail |
+| `AI_PROVIDER` | Optional | `auto` (default) / `gemini` / `openai_compat` / `anthropic` / `none` |
 | `FINNHUB_API_KEY` | Optional | Analyst consensus |
 | `FMP_API_KEY` | Optional | Fundamentals & peers |
 | `FRED_API_KEY` | Optional | Macro data |

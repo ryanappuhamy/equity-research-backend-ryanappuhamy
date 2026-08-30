@@ -1,5 +1,39 @@
 # Changelog — Equity Research Platform
 
+## 2026-08-31 — Free-first AI chain + earnings-transcript fix
+- **AI is free by default now.** `config.ai_provider_chain()` returns an ordered
+  list — `gemini` → `openai_compat` → `anthropic` → template — and `_llm_complete`
+  advances only when a call actually fails. Claude is the emergency fallback and
+  essentially never runs.
+- Added an **OpenAI-compatible** provider (`_complete_openai_compat`): one plain-REST
+  path that works with Groq (default), Cerebras, OpenRouter, Mistral, DeepSeek —
+  switch via `OPENAI_COMPAT_BASE_URL` / `OPENAI_COMPAT_MODEL` / `OPENAI_COMPAT_API_KEY`.
+  Default target: Groq `openai/gpt-oss-120b` (free tier).
+- Removed `active_ai_provider()` (single-provider) in favour of the chain.
+- **Earnings-transcript truncation fix.** Debugged with NVDA's Q2 FY27 CFO commentary
+  (8-K EX-99.2): the old flat 8,000-char prefix cut dropped the entire "Outlook"
+  section (Q3 revenue/margin/opex guidance starts at char ~9,700), which the prompt
+  explicitly asks the model to extract. Hypothesis "boilerplate precedes the numbers"
+  was wrong — NVDA leads with the summary table; the boilerplate is a *tail*.
+  - `_strip_boilerplate_tail()`: drop everything from the first "Non-GAAP Measures" /
+    "Forward-Looking Statements" / "Safe Harbor" / "Cautionary Statement" marker
+    (min offset 2,000 chars, with a floor guard). NVDA: 19,722 → 10,478 chars, keeping
+    the full guidance and dropping ~9k chars of legal text.
+  - `TRANSCRIPT_MAX_CHARS` 8,000 → 40,000 (backstop only; trivial for Gemini's 1M context).
+  - Prompt asks for `management_guidance` as a short string with the exact figures;
+    `_template_report` also handles a dict result.
+- `LLM_TIMEOUT_SECONDS` 90 → 120; Gemini `maxOutputTokens` gets 2× headroom for its
+  internal reasoning.
+- Verified end to end on NVDA's Q2 FY27 filing: the transcript analysis now
+  extracts "Q3 FY27 revenue $108.0B ±2%, GM 74.0% ±50bps, GAAP opex ~$9.2B /
+  non-GAAP ~$9.0B, FY27 tax 16–18%" — content that was 100% lost before —
+  on Gemini (primary, ~20-50s) and on the Groq tier (`openai/gpt-oss-120b`,
+  ~3s, same output). Full `/report/NVDA` runs on Gemini; header credits the
+  actual model used.
+- Note: with the chain default, the weekly brief (the only call carrying portfolio
+  holdings) also goes to Gemini's free tier, which may use inputs for training.
+  Pin it back with `AI_PROVIDER=anthropic` if that matters; holdings carry no name.
+
 ## 2026-08-31 — API hardening (opt-in)
 - **API key gate** (`auth.require_api_key`, global FastAPI dependency): when
   `API_SECRET` is set, every route except `/health` and the docs requires header

@@ -10,10 +10,11 @@ The report never invents numbers: the prompt instructs the model to only
 reference figures present in the input data.
 
 PROVIDER-AGNOSTIC:
-  All model calls go through _llm_complete(), which dispatches to Anthropic
-  (Claude) or Google Gemini based on config.active_ai_provider(). With no key
-  configured, every entry point degrades gracefully to a structured template
-  built from the collected data — the API never hard-fails on a missing key.
+  All model calls go through _llm_complete(), which walks config.ai_provider_chain()
+  — free tiers first (Gemini, then an OpenAI-compatible endpoint), Claude only as a
+  last resort — advancing to the next provider only when a call actually fails.
+  With no key configured, every entry point degrades to a structured template
+  built from the collected data — the API never hard-fails.
 """
 
 import json
@@ -28,7 +29,7 @@ import config
 GEMINI_ENDPOINT = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 )
-LLM_TIMEOUT_SECONDS = 90
+LLM_TIMEOUT_SECONDS = 120
 
 SYSTEM_PROMPT = """You are an equity research analyst writing an institutional-style research note.
 
@@ -79,22 +80,27 @@ DATA:
 # --------------------------------------------------------------------------- #
 # Provider dispatch
 # --------------------------------------------------------------------------- #
+_PROVIDER_FUNCS = {}  # populated below (after the _complete_* defs)
+
+
 def _llm_complete(system: str, prompt: str, max_tokens: int = 2000) -> tuple[str | None, str | None]:
     """
-    Run one completion against the configured provider.
+    Run one completion, walking the provider chain until one succeeds.
 
-    Returns (text, model_label). On any failure or with no provider configured,
+    Returns (text, model_label). If every provider fails / none is configured,
     returns (None, None) so callers fall back to their template output.
     """
-    provider = config.active_ai_provider()
-    if provider == "anthropic":
-        return _complete_anthropic(system, prompt, max_tokens)
-    if provider == "gemini":
-        return _complete_gemini(system, prompt, max_tokens)
-    print(
-        "[error] LLM: no AI provider configured "
-        "(set ANTHROPIC_API_KEY or GEMINI_API_KEY) — using template output"
-    )
+    chain = config.ai_provider_chain()
+    if not chain:
+        print("[error] LLM: no provider configured — using template output")
+        return None, None
+
+    for provider in chain:
+        text, model = _PROVIDER_FUNCS[provider](system, prompt, max_tokens)
+        if text:
+            return text, model
+        print(f"[warn] LLM provider '{provider}' failed — trying next in chain")
+    print("[error] LLM: all providers in the chain failed — using template output")
     return None, None
 
 
@@ -135,7 +141,12 @@ def _complete_gemini(system: str, prompt: str, max_tokens: int) -> tuple[str | N
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7},
+        # Gemini 3.x spends part of the output budget on internal reasoning, so
+        # give generous headroom (output is free on the flash tier anyway).
+        "generationConfig": {
+            "maxOutputTokens": max(max_tokens * 2, 4096),
+            "temperature": 0.7,
+        },
     }
 
     for model in config.GEMINI_MODELS:
@@ -167,6 +178,47 @@ def _complete_gemini(system: str, prompt: str, max_tokens: int) -> tuple[str | N
             continue
     print("[error] Gemini API: all models failed")
     return None, None
+
+
+def _complete_openai_compat(system: str, prompt: str, max_tokens: int) -> tuple[str | None, str | None]:
+    """Groq / Cerebras / OpenRouter / Mistral / DeepSeek — all the same wire format."""
+    if not config.OPENAI_COMPAT_API_KEY:
+        return None, None
+    model = config.OPENAI_COMPAT_MODEL
+    try:
+        resp = requests.post(
+            f"{config.OPENAI_COMPAT_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {config.OPENAI_COMPAT_API_KEY}"},
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+                "max_tokens": max_tokens,
+                "temperature": 0.7,
+            },
+            timeout=LLM_TIMEOUT_SECONDS,
+        )
+        if resp.status_code != 200:
+            print(f"[error] OpenAI-compat {model} -> HTTP {resp.status_code}: {resp.text[:200]}")
+            return None, None
+        choices = resp.json().get("choices") or []
+        text = (choices[0].get("message", {}).get("content", "") if choices else "").strip()
+        if text:
+            return text, model
+        print(f"[error] OpenAI-compat {model}: empty response")
+        return None, None
+    except Exception as e:
+        print(f"[error] OpenAI-compat {model} failed: {e}")
+        return None, None
+
+
+_PROVIDER_FUNCS.update(
+    gemini=_complete_gemini,
+    openai_compat=_complete_openai_compat,
+    anthropic=_complete_anthropic,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -322,6 +374,8 @@ def _template_report(payload: dict, reason: str = "") -> str:
         lines.append("## Earnings Transcript Highlights")
         lines.append(f"- **Sentiment:** {transcript.get('sentiment', 'N/A')}")
         guidance = transcript.get("management_guidance")
+        if isinstance(guidance, dict):
+            guidance = "; ".join(f"{k.replace('_', ' ')}: {v}" for k, v in guidance.items() if v)
         if guidance:
             lines.append(f"- **Guidance:** {guidance}")
         risks = transcript.get("key_risks") or []
@@ -339,7 +393,24 @@ def _fallback_report(payload: dict) -> str:
 # --------------------------------------------------------------------------- #
 # Earnings transcript analysis
 # --------------------------------------------------------------------------- #
-TRANSCRIPT_MAX_CHARS = 8000
+# Primary provider (Gemini) has a 1M-token context, so a whole 8-K exhibit fits
+# easily. The cap is just a backstop for a pathological document.
+TRANSCRIPT_MAX_CHARS = 40000
+
+# Section headers that mark the start of the legal/boilerplate tail of an 8-K
+# exhibit or press release. Everything from the earliest match onward is dropped
+# BEFORE the char cap, so the financial content (incl. the Outlook / guidance
+# section, which sits just before this boilerplate) keeps priority.
+_BOILERPLATE_MARKERS = (
+    "non-gaap measures",
+    "non-gaap financial measures",
+    "use of non-gaap",
+    "forward-looking statements",
+    "forward looking statements",
+    "cautionary statement",
+    "safe harbor",
+)
+_BOILERPLATE_MIN_OFFSET = 2000  # ignore passing mentions near the top
 
 TRANSCRIPT_SYSTEM = """You are an equity research analyst reviewing an earnings call transcript.
 Extract structured insights from the transcript only. Do not invent information not present in the text.
@@ -348,7 +419,9 @@ Return valid JSON matching the requested schema exactly."""
 TRANSCRIPT_PROMPT = """Analyze this earnings call transcript for {ticker}.
 
 Extract:
-1. management_guidance — next quarter guidance or outlook (revenue, EPS, margins, or qualitative; null if not stated)
+1. management_guidance — next quarter guidance or outlook. Prefer specifics
+   (revenue, EPS, gross margin, opex — with the exact figures and ranges stated).
+   Return a short string; null if no guidance is given.
 2. key_risks — list of key risks management mentioned
 3. sentiment — overall tone: "bullish", "neutral", or "bearish"
 4. top_quotes — exactly 3 most important executive quotes, each with "speaker" and "quote"
@@ -384,11 +457,25 @@ def _parse_json_response(text: str) -> dict:
     return json.loads(text.strip())
 
 
+def _strip_boilerplate_tail(text: str) -> str:
+    """Drop the legal/non-GAAP-explanation tail of an 8-K exhibit, if present."""
+    low = text.lower()
+    cut = len(text)
+    for marker in _BOILERPLATE_MARKERS:
+        i = low.find(marker)
+        if i >= _BOILERPLATE_MIN_OFFSET:
+            cut = min(cut, i)
+    trimmed = text[:cut].rstrip()
+    # Guard against a false positive that would gut the document.
+    return trimmed if len(trimmed) >= _BOILERPLATE_MIN_OFFSET else text
+
+
 def _truncate_transcript(text: str) -> tuple[str, bool]:
+    """Boilerplate-trim, then hard-cap. Returns (text, was_shortened)."""
     stripped = text.strip()
-    if len(stripped) <= TRANSCRIPT_MAX_CHARS:
-        return stripped, False
-    return stripped[:TRANSCRIPT_MAX_CHARS], True
+    trimmed = _strip_boilerplate_tail(stripped)
+    capped = trimmed[:TRANSCRIPT_MAX_CHARS]
+    return capped, len(capped) < len(stripped)
 
 
 def analyze_transcript(transcript_text: str, ticker: str) -> dict:
@@ -403,7 +490,12 @@ def analyze_transcript(transcript_text: str, ticker: str) -> dict:
             return {"available": False, "note": note}
 
         truncated, was_truncated = _truncate_transcript(transcript_text)
-        if config.active_ai_provider() == "none":
+        print(
+            f"[info] transcript {ticker}: {len(transcript_text.strip())} raw chars -> "
+            f"{len(truncated)} sent (boilerplate-trim + {TRANSCRIPT_MAX_CHARS}-char cap)"
+        )
+
+        if not config.ai_provider_chain():
             note = "No AI provider configured — transcript collected but not analyzed"
             print(f"[error] {note}")
             return {"available": False, "note": note, "char_count": len(transcript_text)}

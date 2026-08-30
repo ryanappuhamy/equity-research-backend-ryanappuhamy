@@ -11,6 +11,13 @@ services:
         value: 3.11.9
       - key: DATABASE_URL
         sync: false
+      # AI: free-first chain (gemini -> openai_compat -> anthropic -> template)
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_COMPAT_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
       # Optional hardening — set these to lock down the public API.
       # API_SECRET must also be set as NEXT_PUBLIC_API_SECRET on the frontend.
       - key: API_SECRET

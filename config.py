@@ -2,18 +2,20 @@
 Central configuration.
 API keys are read from environment variables — never hardcode them.
 
-AI report generation — pick ONE (see AI_PROVIDER below):
-    ANTHROPIC_API_KEY   -> Claude API (best prose; paid — Haiku 4.5 costs cents)
-    GEMINI_API_KEY      -> Google Gemini API (Flash tier is free, no card; get a
-                           key at https://aistudio.google.com/apikey)
-    (neither)           -> structured template reports built from the raw data
+AI report generation — free-first fallback chain (see AI_PROVIDER below):
+    GEMINI_API_KEY        -> Google Gemini (free, 1M context) — the primary
+    OPENAI_COMPAT_API_KEY -> any OpenAI-compatible free endpoint (Groq default;
+                             also Cerebras / OpenRouter / Mistral / DeepSeek)
+    ANTHROPIC_API_KEY     -> Claude — emergency fallback only (paid)
+    (none set)            -> structured template reports built from the raw data
 Optional:
     ALPHA_VANTAGE_API_KEY -> Alpha Vantage company overview (P/E, revenue growth)
     FMP_API_KEY         -> Financial Modeling Prep (peers, supplementary analyst data)
     FRED_API_KEY        -> FRED macro data (free, register at fred.stlouisfed.org)
     FINNHUB_API_KEY     -> Finnhub analyst consensus, price targets, EPS estimates (free tier)
     DATABASE_URL        -> PostgreSQL connection string (Supabase/Render); falls back to SQLite
-    AI_PROVIDER         -> "auto" (default), "anthropic", "gemini", or "none"
+    AI_PROVIDER         -> "auto" (default) | "gemini" | "openai_compat" | "anthropic" | "none"
+    OPENAI_COMPAT_BASE_URL / OPENAI_COMPAT_MODEL -> point the fallback tier elsewhere
     API_SECRET         -> if set, require header  X-API-Key: <value>  on protected routes
     FORCE_PASSWORD     -> required by cache-invalidation / force-regenerate routes
     RATE_LIMIT_DEFAULT -> per-IP limit for all routes (default "120/minute")
@@ -46,42 +48,54 @@ RATE_LIMIT_DEFAULT = os.environ.get("RATE_LIMIT_DEFAULT", "120/minute").strip()
 RATE_LIMIT_PIPELINE = os.environ.get("RATE_LIMIT_PIPELINE", "10/minute").strip()
 
 # --- AI provider selection ---
-# "auto"      -> Anthropic if ANTHROPIC_API_KEY is set, else Gemini if
-#                GEMINI_API_KEY is set, else template reports.
-# "anthropic" -> force Claude (template fallback if the key is missing).
-# "gemini"    -> force Gemini (template fallback if the key is missing).
-# "none"      -> always use template reports (no API calls, no cost).
+# The pipeline tries providers in order, cheapest first, and only advances to the
+# next one when a call actually fails (rate limit, error, model gone). Claude is
+# the last resort — with free tiers healthy it essentially never runs.
+#
+#   AI_PROVIDER = "auto" (default)  -> gemini -> openai_compat -> anthropic -> template
+#                 "gemini"          -> gemini only
+#                 "openai_compat"   -> the OpenAI-compatible endpoint only
+#                 "anthropic"       -> Claude only
+#                 "none"            -> template reports, no API calls
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "auto").strip().lower()
 
-# --- Claude models (tried in order, newest first) ---
+# --- Claude models (tried in order, newest first). Emergency fallback only. ---
 CLAUDE_MODELS = [
     "claude-sonnet-4-6",
     "claude-sonnet-4-5",
 ]
 
-# --- Gemini models (tried in order). Flash tiers are free and more than
-# enough for single-user / showcase traffic. ---
+# --- Gemini models (tried in order). Free tier, 1M context — the primary. ---
 GEMINI_MODELS = [
     "gemini-3.6-flash",
     "gemini-3.7-flash",
     "gemini-flash-latest",
 ]
 
+# --- OpenAI-compatible free fallback ---
+# Defaults target Groq (free tier, fast, reliable). Groq / Cerebras / OpenRouter
+# / Mistral / DeepSeek all speak this same API — to switch, change base URL +
+# model (and key). Leave OPENAI_COMPAT_API_KEY blank to skip this tier entirely.
+OPENAI_COMPAT_API_KEY = os.environ.get("OPENAI_COMPAT_API_KEY", "").strip()
+OPENAI_COMPAT_BASE_URL = os.environ.get(
+    "OPENAI_COMPAT_BASE_URL", "https://api.groq.com/openai/v1"
+).strip().rstrip("/")
+OPENAI_COMPAT_MODEL = os.environ.get("OPENAI_COMPAT_MODEL", "openai/gpt-oss-120b").strip()
 
-def active_ai_provider() -> str:
-    """Resolve which LLM backend to use given AI_PROVIDER and the available keys."""
-    if AI_PROVIDER == "anthropic":
-        return "anthropic" if ANTHROPIC_API_KEY else "none"
-    if AI_PROVIDER == "gemini":
-        return "gemini" if GEMINI_API_KEY else "none"
+
+def ai_provider_chain() -> list[str]:
+    """Ordered providers to try. Free tiers first, Claude last, [] == template."""
+    have = {
+        "gemini": bool(GEMINI_API_KEY),
+        "openai_compat": bool(OPENAI_COMPAT_API_KEY),
+        "anthropic": bool(ANTHROPIC_API_KEY),
+    }
     if AI_PROVIDER == "none":
-        return "none"
+        return []
+    if AI_PROVIDER in have:
+        return [AI_PROVIDER] if have[AI_PROVIDER] else []
     # auto
-    if ANTHROPIC_API_KEY:
-        return "anthropic"
-    if GEMINI_API_KEY:
-        return "gemini"
-    return "none"
+    return [name for name in ("gemini", "openai_compat", "anthropic") if have[name]]
 
 # --- Analysis settings ---
 PRICE_LOOKBACK_YEARS = 5

@@ -66,18 +66,20 @@ Outputs: `output/<TICKER>_report.md` and `output/<TICKER>_data.json`
 | **Financial Modeling Prep** | ~$14/mo (optional) | Clean fundamentals, peer lists, analyst consensus |
 | **SEC EDGAR** | Free | Form 4 insider filings; 8-K earnings transcripts / exhibits |
 | **FRED** | Free (API key) | Fed funds, 10Y yield, CPI YoY, unemployment |
-| **Google Gemini** | **Free** (Flash tier, no card) | Research notes, transcript analysis, portfolio briefs |
-| **Anthropic (Claude)** | Pay per use (Haiku 4.5 ≈ cents) | Same, with stronger prose — alternative to Gemini |
+| **Google Gemini** | **Free** (Flash, 1M context) | Primary AI — research notes, transcript analysis, portfolio briefs |
+| **Groq / Cerebras / …** | **Free** (OpenAI-compatible) | Second-tier AI fallback (GPT-OSS-120B, Qwen3, Llama 4) |
+| **Anthropic (Claude)** | Pay per use | Emergency AI fallback only — fires when both free tiers fail |
 | **SQLite** | Free | Local storage (`portfolio.db`) for positions and alerts |
 
-Works with **zero paid keys**: yfinance + SEC for data, **Gemini Flash (free)** for AI interpretation. FMP unlocks peers and analyst data; if no AI key is set at all, structured template reports are used as fallback.
+Works with **zero paid keys**: yfinance + SEC for data, **Gemini Flash (free)** for AI. FMP unlocks peers and analyst data; if no AI key is set at all, structured template reports are used as fallback.
 
 ### Smart choices baked in
 
-- **Provider-agnostic AI layer.** `ai_report.py` routes every model call through one `_llm_complete()` dispatcher. Set `GEMINI_API_KEY` (free) *or* `ANTHROPIC_API_KEY` (paid) — the code auto-selects, or force it with `AI_PROVIDER`. Swapping providers is a config change, not a rewrite.
-- **No extra SDK for Gemini.** Gemini is called over plain REST with the `requests` dependency the data layer already needs — key sent as an `x-goog-api-key` header, never in a URL.
-- **AI never hard-fails.** Missing/rate-limited/broken key → structured template report from the real data. The API stays up.
-- **Cost control.** Default Claude model is Sonnet; drop `CLAUDE_MODELS` to `["claude-haiku-4-5"]` in `config.py` for ~5× cheaper calls, or set `AI_PROVIDER=none` to disable AI spend entirely.
+- **Free-first AI chain.** Every model call walks `config.ai_provider_chain()`: **Gemini → an OpenAI-compatible free endpoint → Claude → template**, advancing only when a call actually fails. Claude essentially never runs. One `_llm_complete()` dispatcher in `ai_report.py`; swapping providers is a config change.
+- **One integration covers many providers.** The `openai_compat` tier speaks the OpenAI chat format — point `OPENAI_COMPAT_BASE_URL` / `_MODEL` at Groq, Cerebras, OpenRouter, Mistral, or DeepSeek without touching code.
+- **No extra SDKs.** Gemini and the OpenAI-compatible tier are plain REST over the `requests` dependency the data layer already needs. Keys go in headers, never URLs.
+- **AI never hard-fails.** Every tier down → structured template report from the real data. The API stays up.
+- **Transcript handling.** The 8-K exhibit gets its legal/non-GAAP boilerplate tail stripped, then capped at 40k chars — so the Outlook/guidance section (which sits just before that boilerplate) always reaches the model. Trivial for Gemini's 1M context.
 
 ---
 
@@ -93,10 +95,11 @@ Set environment variables — copy `.env.example` to `.env` and fill in what you
 or export them directly (PowerShell):
 
 ```powershell
-# --- AI provider: pick ONE (or neither → template reports) ---
-$env:GEMINI_API_KEY = "..."             # free — get one at https://aistudio.google.com/apikey
-$env:ANTHROPIC_API_KEY = "sk-ant-..."   # paid alternative (takes priority if both are set)
-$env:AI_PROVIDER = "auto"               # optional: auto | anthropic | gemini | none
+# --- AI: free-first chain (gemini -> openai_compat -> anthropic -> template) ---
+$env:GEMINI_API_KEY = "..."             # primary, free: https://aistudio.google.com/apikey
+$env:OPENAI_COMPAT_API_KEY = "..."      # free fallback: https://console.groq.com/keys
+$env:ANTHROPIC_API_KEY = "sk-ant-..."   # emergency fallback only (paid)
+$env:AI_PROVIDER = "auto"               # auto | gemini | openai_compat | anthropic | none
 
 # --- market data (all optional) ---
 $env:ALPHA_VANTAGE_API_KEY = "..."      # fundamentals (falls back to yfinance)
