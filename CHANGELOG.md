@@ -1,5 +1,17 @@
 # Changelog — Equity Research Platform
 
+## 2026-08-31 — Retry / Regenerate: no more password prompt
+- Removed the `window.prompt("Enter password…")` from the Research Report "Retry"
+  button and the Weekly Brief "Regenerate" button. The frontend now sends
+  `NEXT_PUBLIC_FORCE_PASSWORD` automatically via the existing `X-Force-Password`
+  header — press the button, it clears the cache and re-runs. No value is
+  hardcoded in source; it still comes from env on both sides (`FORCE_PASSWORD`
+  backend / `NEXT_PUBLIC_FORCE_PASSWORD` frontend, must match).
+- Trade-off: `NEXT_PUBLIC_*` is visible in the browser bundle, so this is
+  "keeps out bots and casual pokers", not real auth. The prior typed-secret flow
+  was stronger; for a single-user showcase, convenience wins. Rate limiting
+  (10/min on the pipeline routes) remains the real guard against cost abuse.
+
 ## 2026-08-31 — Free-first AI chain + earnings-transcript fix
 - **AI is free by default now.** `config.ai_provider_chain()` returns an ordered
   list — `gemini` → `openai_compat` → `anthropic` → template — and `_llm_complete`
