@@ -1,5 +1,21 @@
 # Changelog — Equity Research Platform
 
+## 2026-08-30 — Provider-agnostic AI layer
+- Refactored `ai_report.py` so every model call goes through one `_llm_complete()`
+  dispatcher (removed the duplicated inline Anthropic client in `generate_report`)
+- Added Google Gemini as an AI backend alongside Claude:
+  - Called over plain REST via `requests` — no new SDK dependency
+  - API key sent as `x-goog-api-key` header, never in a URL/query string
+  - Model fallback chain: `gemini-2.5-flash` → `gemini-2.0-flash`
+- `config.active_ai_provider()` picks the backend: `AI_PROVIDER` env
+  (`auto` | `anthropic` | `gemini` | `none`); `auto` prefers Anthropic if its key
+  is set, else Gemini, else template reports
+- Rationale: Gemini Flash has a genuinely free tier (no card) — enough for
+  single-user / showcase traffic — while keeping Claude available for stronger
+  prose. Swapping providers is now a config change, not a code change.
+- Every AI entry point still degrades to a structured template on any failure
+- Added `.env.example`; README documents the AI-provider choice and cost levers
+
 ## 2026-05-21 — Project Conception
 - Initial idea for equity research platform
 - Stack selection: Python/FastAPI backend + Next.js frontend + Supabase

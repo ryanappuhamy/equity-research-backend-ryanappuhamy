@@ -37,7 +37,7 @@ Sites like Yahoo Finance and Investing.com excel at *browsing* markets. This pro
 | `data_earnings.py` | SEC EDGAR 8-K earnings transcripts / EX-99 exhibits |
 | `data_macro.py` | FRED macro context (rates, CPI, unemployment) |
 | `peer_comparison.py` | Comps table + relative valuation vs peer median |
-| `ai_report.py` | Claude API — research notes, transcript analysis, portfolio briefs; template fallback |
+| `ai_report.py` | AI research notes, transcript analysis, portfolio briefs — provider-agnostic (Claude **or** Gemini); template fallback |
 | `portfolio.py` | SQLite portfolio tracker (positions, P&L, weights) |
 | `portfolio_risk.py` | 1-year risk decomposition, correlation, scenario analysis |
 | `alerts.py` | User-defined alert rules; pipeline-backed condition checking |
@@ -66,10 +66,18 @@ Outputs: `output/<TICKER>_report.md` and `output/<TICKER>_data.json`
 | **Financial Modeling Prep** | ~$14/mo (optional) | Clean fundamentals, peer lists, analyst consensus |
 | **SEC EDGAR** | Free | Form 4 insider filings; 8-K earnings transcripts / exhibits |
 | **FRED** | Free (API key) | Fed funds, 10Y yield, CPI YoY, unemployment |
-| **Anthropic (Claude)** | Pay per use | Research notes, transcript analysis, portfolio briefs |
+| **Google Gemini** | **Free** (Flash tier, no card) | Research notes, transcript analysis, portfolio briefs |
+| **Anthropic (Claude)** | Pay per use (Haiku 4.5 ≈ cents) | Same, with stronger prose — alternative to Gemini |
 | **SQLite** | Free | Local storage (`portfolio.db`) for positions and alerts |
 
-Works with **zero paid keys** (yfinance + SEC only). FMP unlocks peers and analyst data; Claude unlocks AI interpretation (template reports used as fallback).
+Works with **zero paid keys**: yfinance + SEC for data, **Gemini Flash (free)** for AI interpretation. FMP unlocks peers and analyst data; if no AI key is set at all, structured template reports are used as fallback.
+
+### Smart choices baked in
+
+- **Provider-agnostic AI layer.** `ai_report.py` routes every model call through one `_llm_complete()` dispatcher. Set `GEMINI_API_KEY` (free) *or* `ANTHROPIC_API_KEY` (paid) — the code auto-selects, or force it with `AI_PROVIDER`. Swapping providers is a config change, not a rewrite.
+- **No extra SDK for Gemini.** Gemini is called over plain REST with the `requests` dependency the data layer already needs — key sent as an `x-goog-api-key` header, never in a URL.
+- **AI never hard-fails.** Missing/rate-limited/broken key → structured template report from the real data. The API stays up.
+- **Cost control.** Default Claude model is Sonnet; drop `CLAUDE_MODELS` to `["claude-haiku-4-5"]` in `config.py` for ~5× cheaper calls, or set `AI_PROVIDER=none` to disable AI spend entirely.
 
 ---
 
@@ -81,15 +89,24 @@ cd equity-research-platform-ryanappuhamy
 pip install -r requirements.txt
 ```
 
-Set environment variables (PowerShell):
+Set environment variables — copy `.env.example` to `.env` and fill in what you need,
+or export them directly (PowerShell):
 
 ```powershell
-$env:ANTHROPIC_API_KEY = "sk-ant-..."   # optional — AI reports & briefs
-$env:FMP_API_KEY = "..."                # optional — peers & analyst consensus
-$env:FRED_API_KEY = "..."               # optional — macro context (free at fred.stlouisfed.org)
+# --- AI provider: pick ONE (or neither → template reports) ---
+$env:GEMINI_API_KEY = "..."             # free — get one at https://aistudio.google.com/apikey
+$env:ANTHROPIC_API_KEY = "sk-ant-..."   # paid alternative (takes priority if both are set)
+$env:AI_PROVIDER = "auto"               # optional: auto | anthropic | gemini | none
+
+# --- market data (all optional) ---
+$env:ALPHA_VANTAGE_API_KEY = "..."      # fundamentals (falls back to yfinance)
+$env:FMP_API_KEY = "..."                # peers & analyst consensus
+$env:FRED_API_KEY = "..."               # macro context (free at fred.stlouisfed.org)
+$env:FINNHUB_API_KEY = "..."            # analyst consensus, price targets, EPS estimates
 ```
 
-Optional: `$env:PORTFOLIO_DB = "portfolio.db"` to change the SQLite database path.
+Optional: `$env:PORTFOLIO_DB = "portfolio.db"` to change the SQLite database path,
+`$env:DATABASE_URL = "postgresql://..."` to use Postgres (Supabase/Render) instead of SQLite.
 
 **Cloud deploy:** see [DEPLOY.md](DEPLOY.md) (Render, Railway, Docker).
 

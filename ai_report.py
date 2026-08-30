@@ -1,5 +1,5 @@
 """
-AI research report generation (Claude API).
+AI research report generation.
 
 IMPORTANT DESIGN PRINCIPLE — separation of fact and interpretation:
   - Everything fed INTO the model is objective data collected upstream.
@@ -8,12 +8,27 @@ IMPORTANT DESIGN PRINCIPLE — separation of fact and interpretation:
 
 The report never invents numbers: the prompt instructs the model to only
 reference figures present in the input data.
+
+PROVIDER-AGNOSTIC:
+  All model calls go through _llm_complete(), which dispatches to Anthropic
+  (Claude) or Google Gemini based on config.active_ai_provider(). With no key
+  configured, every entry point degrades gracefully to a structured template
+  built from the collected data — the API never hard-fails on a missing key.
 """
 
 import json
-import anthropic
+
+import requests
 
 import config
+
+# Gemini is called over plain REST (no extra SDK dependency — `requests` is
+# already required for the data layer). Auth via the x-goog-api-key header so
+# the key never lands in a URL / query string.
+GEMINI_ENDPOINT = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+)
+LLM_TIMEOUT_SECONDS = 90
 
 SYSTEM_PROMPT = """You are an equity research analyst writing an institutional-style research note.
 
@@ -61,45 +76,122 @@ DATA:
 """
 
 
+# --------------------------------------------------------------------------- #
+# Provider dispatch
+# --------------------------------------------------------------------------- #
+def _llm_complete(system: str, prompt: str, max_tokens: int = 2000) -> tuple[str | None, str | None]:
+    """
+    Run one completion against the configured provider.
+
+    Returns (text, model_label). On any failure or with no provider configured,
+    returns (None, None) so callers fall back to their template output.
+    """
+    provider = config.active_ai_provider()
+    if provider == "anthropic":
+        return _complete_anthropic(system, prompt, max_tokens)
+    if provider == "gemini":
+        return _complete_gemini(system, prompt, max_tokens)
+    print(
+        "[error] LLM: no AI provider configured "
+        "(set ANTHROPIC_API_KEY or GEMINI_API_KEY) — using template output"
+    )
+    return None, None
+
+
+def _complete_anthropic(system: str, prompt: str, max_tokens: int) -> tuple[str | None, str | None]:
+    try:
+        import anthropic
+    except ImportError as e:
+        print(f"[error] Anthropic SDK not installed: {e}")
+        return None, None
+
+    try:
+        client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    except Exception as e:
+        print(f"[error] Anthropic client init failed: {e}")
+        return None, None
+
+    for model in config.CLAUDE_MODELS:
+        try:
+            msg = client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = "".join(b.text for b in msg.content if hasattr(b, "text")).strip()
+            if text:
+                return text, model
+            print(f"[error] Claude API {model}: empty response")
+        except Exception as e:
+            print(f"[error] Claude API failed with model {model}: {e}")
+            continue
+    print("[error] Claude API: all models failed")
+    return None, None
+
+
+def _complete_gemini(system: str, prompt: str, max_tokens: int) -> tuple[str | None, str | None]:
+    headers = {"x-goog-api-key": config.GEMINI_API_KEY}
+    body = {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.7},
+    }
+
+    for model in config.GEMINI_MODELS:
+        try:
+            resp = requests.post(
+                GEMINI_ENDPOINT.format(model=model),
+                headers=headers,
+                json=body,
+                timeout=LLM_TIMEOUT_SECONDS,
+            )
+            if resp.status_code != 200:
+                print(f"[error] Gemini API {model} -> HTTP {resp.status_code}: {resp.text[:200]}")
+                continue
+
+            candidates = resp.json().get("candidates") or []
+            if not candidates:
+                print(f"[error] Gemini API {model}: no candidates returned")
+                continue
+
+            parts = (candidates[0].get("content") or {}).get("parts") or []
+            text = "".join(p.get("text", "") for p in parts).strip()
+            if text:
+                return text, model
+
+            finish = candidates[0].get("finishReason")
+            print(f"[error] Gemini API {model}: empty text (finishReason={finish})")
+        except Exception as e:
+            print(f"[error] Gemini API {model} failed: {e}")
+            continue
+    print("[error] Gemini API: all models failed")
+    return None, None
+
+
+# --------------------------------------------------------------------------- #
+# Research note
+# --------------------------------------------------------------------------- #
 def generate_report(payload: dict) -> str:
     """
     payload: dict with keys like fundamentals, price_stats, relative_valuation,
     analyst_data, insider_activity, macro_context.
     Returns markdown report text.
     """
-    if not config.ANTHROPIC_API_KEY:
-        print("[error] Claude API: ANTHROPIC_API_KEY not set — using template report")
-        return _template_report(payload, reason="ANTHROPIC_API_KEY not set")
-
     try:
-        client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
         prompt = REPORT_TEMPLATE.format(data_json=json.dumps(payload, indent=2, default=str))
+        text, model = _llm_complete(SYSTEM_PROMPT, prompt, max_tokens=2000)
+        if not text:
+            return _template_report(payload, reason="AI provider unavailable")
 
-        last_error = None
-        for model in config.CLAUDE_MODELS:
-            try:
-                msg = client.messages.create(
-                    model=model,
-                    max_tokens=2000,
-                    system=SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                text = "".join(b.text for b in msg.content if hasattr(b, "text"))
-                header = (
-                    f"# AI-Generated Research Note — {payload.get('ticker', '')}\n\n"
-                    f"*Interpretation generated by {model} from objective data. "
-                    f"Analyst consensus figures, where shown, are real analyst opinions.*\n\n"
-                )
-                return header + text
-            except Exception as e:
-                last_error = e
-                print(f"[error] Claude API failed with model {model}: {e}")
-                continue
-
-        print(f"[error] Claude API: all models failed — using template report ({last_error})")
-        return _template_report(payload, reason=f"Claude API failed: {last_error}")
+        header = (
+            f"# AI-Generated Research Note — {payload.get('ticker', '')}\n\n"
+            f"*Interpretation generated by {model} from objective data. "
+            f"Analyst consensus figures, where shown, are real analyst opinions.*\n\n"
+        )
+        return header + text
     except Exception as e:
-        print(f"[error] Claude API: unexpected error — using template report: {e}")
+        print(f"[error] Report generation: unexpected error — using template report: {e}")
         return _template_report(payload, reason=str(e))
 
 
@@ -244,6 +336,9 @@ def _fallback_report(payload: dict) -> str:
     return _template_report(payload)
 
 
+# --------------------------------------------------------------------------- #
+# Earnings transcript analysis
+# --------------------------------------------------------------------------- #
 TRANSCRIPT_MAX_CHARS = 8000
 
 TRANSCRIPT_SYSTEM = """You are an equity research analyst reviewing an earnings call transcript.
@@ -280,31 +375,6 @@ Holdings data:
 """
 
 
-def _call_claude(system: str, prompt: str, max_tokens: int = 2000) -> str | None:
-    if not config.ANTHROPIC_API_KEY:
-        print("[error] Claude API: ANTHROPIC_API_KEY not set")
-        return None
-    try:
-        client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-        for model in config.CLAUDE_MODELS:
-            try:
-                msg = client.messages.create(
-                    model=model,
-                    max_tokens=max_tokens,
-                    system=system,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                return "".join(b.text for b in msg.content if hasattr(b, "text"))
-            except Exception as e:
-                print(f"[error] Claude API failed with model {model}: {e}")
-                continue
-        print("[error] Claude API: all models failed")
-        return None
-    except Exception as e:
-        print(f"[error] Claude API: unexpected error: {e}")
-        return None
-
-
 def _parse_json_response(text: str) -> dict:
     text = text.strip()
     if text.startswith("```"):
@@ -324,7 +394,7 @@ def _truncate_transcript(text: str) -> tuple[str, bool]:
 def analyze_transcript(transcript_text: str, ticker: str) -> dict:
     """
     Extract guidance, risks, sentiment, and top quotes from an earnings transcript.
-    Returns structured dict; falls back gracefully without API key.
+    Returns structured dict; falls back gracefully without an AI provider.
     """
     try:
         if not transcript_text or len(transcript_text.strip()) < 200:
@@ -333,9 +403,9 @@ def analyze_transcript(transcript_text: str, ticker: str) -> dict:
             return {"available": False, "note": note}
 
         truncated, was_truncated = _truncate_transcript(transcript_text)
-        if not config.ANTHROPIC_API_KEY:
-            note = "ANTHROPIC_API_KEY not set — transcript collected but not analyzed"
-            print(f"[error] Claude API: {note}")
+        if config.active_ai_provider() == "none":
+            note = "No AI provider configured — transcript collected but not analyzed"
+            print(f"[error] {note}")
             return {"available": False, "note": note, "char_count": len(transcript_text)}
 
         truncation_note = (
@@ -349,9 +419,9 @@ def analyze_transcript(transcript_text: str, ticker: str) -> dict:
             truncation_note=truncation_note,
             transcript=truncated,
         )
-        raw = _call_claude(TRANSCRIPT_SYSTEM, prompt, max_tokens=1500)
+        raw, _model = _llm_complete(TRANSCRIPT_SYSTEM, prompt, max_tokens=1500)
         if not raw:
-            note = "Claude API call failed for transcript analysis"
+            note = "AI call failed for transcript analysis"
             print(f"[error] {note} ({ticker})")
             return {"available": False, "note": note}
 
@@ -374,23 +444,22 @@ def analyze_transcript(transcript_text: str, ticker: str) -> dict:
         return {"available": False, "note": note}
 
 
+# --------------------------------------------------------------------------- #
+# Weekly portfolio brief
+# --------------------------------------------------------------------------- #
 def generate_portfolio_brief(portfolio_data: list[dict]) -> str:
     """AI weekly brief for all portfolio holdings."""
     try:
         if not portfolio_data:
             return "No portfolio holdings to brief."
 
-        if not config.ANTHROPIC_API_KEY:
-            print("[error] Claude API: ANTHROPIC_API_KEY not set — returning data summary brief")
-            return _portfolio_brief_template(portfolio_data, reason="ANTHROPIC_API_KEY not set")
-
         prompt = PORTFOLIO_BRIEF_PROMPT.format(
             data_json=json.dumps(portfolio_data, indent=2, default=str)
         )
-        text = _call_claude(PORTFOLIO_BRIEF_SYSTEM, prompt, max_tokens=1500)
+        text, _model = _llm_complete(PORTFOLIO_BRIEF_SYSTEM, prompt, max_tokens=1500)
         if not text:
-            print("[error] Claude API: portfolio brief generation failed — using template")
-            return _portfolio_brief_template(portfolio_data, reason="Claude API call failed")
+            print("[error] AI: portfolio brief generation failed — using template")
+            return _portfolio_brief_template(portfolio_data, reason="AI provider unavailable")
         return f"# Weekly Portfolio Brief\n\n*AI-generated from current holdings and prices.*\n\n{text}"
     except Exception as e:
         print(f"[error] Portfolio brief generation failed: {e}")

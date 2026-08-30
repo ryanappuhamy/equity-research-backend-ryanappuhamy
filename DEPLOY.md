@@ -12,7 +12,9 @@ Set these environment variables in the platform dashboard:
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `ANTHROPIC_API_KEY` | Optional | AI reports & briefs |
+| `GEMINI_API_KEY` | Optional | AI reports & briefs (free tier; auto-used if no Anthropic key) |
+| `ANTHROPIC_API_KEY` | Optional | AI reports & briefs (paid; takes priority over Gemini) |
+| `AI_PROVIDER` | Optional | `auto` (default) / `anthropic` / `gemini` / `none` |
 | `FINNHUB_API_KEY` | Optional | Analyst consensus |
 | `FMP_API_KEY` | Optional | Fundamentals & peers |
 | `FRED_API_KEY` | Optional | Macro data |
