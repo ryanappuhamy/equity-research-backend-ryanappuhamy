@@ -22,23 +22,14 @@ ALLOWED_BENCHMARKS = frozenset({"SPY", "QQQ", "SOXX", "VTI"})
 MAX_LOOKBACK_DAYS = config.PRICE_LOOKBACK_YEARS * 365
 
 
-def _to_utc_dt(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value
-
-
 def _start_date(positions: list[dict]) -> date:
-    today = datetime.now(timezone.utc).date()
-    max_lookback = today - timedelta(days=MAX_LOOKBACK_DAYS)
-    timestamps = [_to_utc_dt(p.get("updated_at")) for p in positions]
-    timestamps = [ts for ts in timestamps if ts is not None]
-    if not timestamps:
-        return max_lookback
-    earliest = min(timestamps).date()
-    return max(max_lookback, earliest)
+    """
+    How far back to value the basket. We don't track per-position purchase
+    dates (only avg_cost_price), so this chart is a BACKTEST of the *current*
+    holdings: full price history back to MAX_LOOKBACK_DAYS, and the frontend's
+    1M / 6M / 1Y / ... selector trims the window client-side.
+    """
+    return datetime.now(timezone.utc).date() - timedelta(days=MAX_LOOKBACK_DAYS)
 
 
 def _extract_single_close(data: pd.DataFrame, ticker: str) -> pd.Series | None:

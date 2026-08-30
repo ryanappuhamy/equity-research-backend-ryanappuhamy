@@ -1,5 +1,20 @@
 # Changelog — Equity Research Platform
 
+## 2026-08-31 — Performance chart now shows real history
+
+`_start_date` clamped the NAV series to `min(position.updated_at)` — i.e. the
+last time the portfolio was saved — so the "1Y / 5Y / MAX" chart only ever had
+~2 months of data and could show the basket *down* while every position's P&L
+(measured vs cost basis) was green.
+
+- `_start_date` now returns the full `MAX_LOOKBACK_DAYS` window; the frontend's
+  period selector trims client-side as intended. 5 tickers × 5 y is one
+  `yf.download` call.
+- The chart is a **backtest of the current holdings** (fixed share counts, no
+  purchase dates tracked) — the panel now says so under the controls.
+- MSFT example basket: 1Y +141%, 5Y +323% vs SPY +82% — consistent with the
+  position-level P&L.
+
 ## 2026-08-31 — "Rigenera" button always visible on a report
 
 The Retry button only rendered when a whole data block (`price_stats` or
