@@ -1,5 +1,13 @@
 # Changelog — Equity Research Platform
 
+## 2026-08-31 — Alerts page: don't block the list on the slow check
+
+The whole Alerts page rendered a skeleton while `useAlertsCheck()` was pending —
+and `/alerts/check` runs the full pipeline per ticker, so the page could sit
+blank for a minute (or forever, if the check hung on a cloud data-source error).
+Now only `useAlerts()` (the fast list) gates the render; the check enriches the
+"Stato" column in place, with a "Verifica delle condizioni in corso…" hint.
+
 ## 2026-08-31 — Finnhub fundamentals fallback (fixes cloud "Unauthorized")
 
 On Render, Yahoo Finance now returns `401 Unauthorized` from datacenter IPs and
