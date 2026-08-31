@@ -3,6 +3,7 @@ FastAPI wrapper for the equity research backend.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -212,7 +213,7 @@ def portfolio_brief(
             "portfolio": holdings,
             "brief": brief,
             "from_cache": False,
-            "cached_at": None,
+            "cached_at": datetime.now(timezone.utc).isoformat(),
         }
     except HTTPException:
         raise

@@ -1,5 +1,13 @@
 # Changelog — Equity Research Platform
 
+## 2026-08-31 — Weekly Brief "Regenerate" gives feedback
+
+The force path returned `cached_at: null`, so after a successful regenerate the
+freshness badge fell back to "Cached" with no timestamp — it looked like nothing
+happened. It now returns the generation time, so the badge flips to "Fresh" and
+the "generated at" line updates. (The auth / no-prompt flow was already fixed
+in the earlier password-prompt removal.)
+
 ## 2026-08-31 — Performance chart now shows real history
 
 `_start_date` clamped the NAV series to `min(position.updated_at)` — i.e. the
