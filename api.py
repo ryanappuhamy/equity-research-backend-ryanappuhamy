@@ -17,6 +17,7 @@ import ai_report
 import alerts
 import auth
 import config
+import data_macro
 import main
 import portfolio
 import portfolio_performance
@@ -207,7 +208,7 @@ def portfolio_brief(
                 "cached_at": fetched_at.isoformat() if fetched_at else None,
             }
 
-        brief = ai_report.generate_portfolio_brief(holdings)
+        brief = ai_report.generate_portfolio_brief(holdings, macro=data_macro.get_macro_context())
         market_cache.set_weekly_brief(holdings, brief)
         return {
             "portfolio": holdings,

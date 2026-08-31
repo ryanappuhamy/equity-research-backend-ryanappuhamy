@@ -52,6 +52,34 @@ def yf_last_price(ticker: str) -> float:
     return float(yf_call(lambda: yf.Ticker(ticker.upper()).fast_info.last_price))
 
 
+def yf_ticker_news(ticker: str, limit: int = 4) -> list[dict]:
+    """Recent news headlines for a ticker: [{title, published, publisher, summary}]."""
+
+    def _fetch() -> list[dict]:
+        raw = yf.Ticker(ticker.upper()).news or []
+        out: list[dict] = []
+        for item in raw[:limit]:
+            c = item.get("content", item)
+            provider = c.get("provider")
+            out.append(
+                {
+                    "title": c.get("title"),
+                    "published": c.get("pubDate") or c.get("providerPublishTime"),
+                    "publisher": provider.get("displayName")
+                    if isinstance(provider, dict)
+                    else c.get("publisher"),
+                    "summary": (c.get("summary") or "")[:300] or None,
+                }
+            )
+        return [n for n in out if n.get("title")]
+
+    try:
+        return yf_call(_fetch)
+    except Exception as e:
+        print(f"[warn] yfinance news failed for {ticker}: {e}")
+        return []
+
+
 def yf_financial_facts(ticker: str) -> dict:
     """
     TTM levels + YoY changes from the annual statements, plus forward revenue

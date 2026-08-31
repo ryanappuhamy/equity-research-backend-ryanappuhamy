@@ -83,9 +83,18 @@ DATA:
 _PROVIDER_FUNCS = {}  # populated below (after the _complete_* defs)
 
 
-def _llm_complete(system: str, prompt: str, max_tokens: int = 2000) -> tuple[str | None, str | None]:
+def _llm_complete(
+    system: str,
+    prompt: str,
+    max_tokens: int = 2000,
+    *,
+    gemini_search: bool = False,
+) -> tuple[str | None, str | None]:
     """
     Run one completion, walking the provider chain until one succeeds.
+
+    gemini_search: when the call lands on Gemini, attach the Google Search
+    grounding tool so the model can cite current news. Ignored by other providers.
 
     Returns (text, model_label). If every provider fails / none is configured,
     returns (None, None) so callers fall back to their template output.
@@ -96,7 +105,10 @@ def _llm_complete(system: str, prompt: str, max_tokens: int = 2000) -> tuple[str
         return None, None
 
     for provider in chain:
-        text, model = _PROVIDER_FUNCS[provider](system, prompt, max_tokens)
+        if provider == "gemini":
+            text, model = _complete_gemini(system, prompt, max_tokens, use_search=gemini_search)
+        else:
+            text, model = _PROVIDER_FUNCS[provider](system, prompt, max_tokens)
         if text:
             return text, model
         print(f"[warn] LLM provider '{provider}' failed — trying next in chain")
@@ -136,7 +148,9 @@ def _complete_anthropic(system: str, prompt: str, max_tokens: int) -> tuple[str 
     return None, None
 
 
-def _complete_gemini(system: str, prompt: str, max_tokens: int) -> tuple[str | None, str | None]:
+def _complete_gemini(
+    system: str, prompt: str, max_tokens: int, use_search: bool = False
+) -> tuple[str | None, str | None]:
     headers = {"x-goog-api-key": config.GEMINI_API_KEY}
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
@@ -148,6 +162,9 @@ def _complete_gemini(system: str, prompt: str, max_tokens: int) -> tuple[str | N
             "temperature": 0.7,
         },
     }
+    if use_search:
+        # Google Search grounding — lets the model cite current news.
+        body["tools"] = [{"google_search": {}}]
 
     for model in config.GEMINI_MODELS:
         try:
@@ -432,18 +449,43 @@ Return ONLY a JSON object with those keys.
 {transcript}
 """
 
-PORTFOLIO_BRIEF_SYSTEM = """You are a portfolio strategist writing a concise weekly brief for an investor.
-Use only the data provided. Be direct and actionable. No buy/sell recommendations."""
+PORTFOLIO_BRIEF_SYSTEM = """You are a portfolio strategist writing a weekly brief.
 
-PORTFOLIO_BRIEF_PROMPT = """Write a weekly portfolio brief covering all holdings below.
+Every market development you mention MUST come from the `recent_news` items in the
+data (or from live search results, if you have them). Do NOT rely on your training
+memory for anything time-sensitive — no invented headlines, dates, product names,
+or events. If the news items don't support a point, leave it out.
 
-Include:
-- Portfolio overview (composition, notable movers)
-- Key themes across holdings
-- Risks to watch this week
-- 3 bullet points of what matters most
+The reader can already see the portfolio weights and P&L — do NOT pad the brief by
+restating them as if they were insights ("X is 57% of the portfolio", "heavy tech
+concentration"). Spend the words on what is actually happening and what it means
+for these specific names. No buy/sell recommendations."""
 
-Holdings data:
+PORTFOLIO_BRIEF_PROMPT = """Write this week's portfolio brief. Today is {as_of}.
+
+Base it on the holdings, macro data, and `recent_news` below (plus live search if
+available). Connect the news to these specific tickers and sectors — AI /
+data-center capex, semiconductors, the US economy and policy, geopolitics.
+
+## This Week in Context
+2-4 sentences on the macro and market backdrop right now — rates and inflation
+(cite the figures), the state of the AI infrastructure cycle, and any major policy
+or geopolitical development — and how it touches THIS portfolio.
+
+## What Moved and Why
+Per material holding, 1-2 sentences: the recent price action (use the change_1w /
+change_1m figures) and the concrete driver — an earnings print, a product or
+partnership, a sector rotation, a macro shock. Skip holdings with nothing notable.
+
+## Risks to Watch This Week
+3 specific near-term risks tied to real upcoming catalysts (a data release, an
+earnings date, a policy decision, an export-control headline) — NOT "the portfolio
+is concentrated".
+
+## Bottom Line
+2-3 sentences: the one or two things that matter most for the week ahead.
+
+DATA:
 {data_json}
 """
 
@@ -539,20 +581,76 @@ def analyze_transcript(transcript_text: str, ticker: str) -> dict:
 # --------------------------------------------------------------------------- #
 # Weekly portfolio brief
 # --------------------------------------------------------------------------- #
-def generate_portfolio_brief(portfolio_data: list[dict]) -> str:
-    """AI weekly brief for all portfolio holdings."""
+def _holding_moves(ticker: str) -> dict:
+    """Best-effort recent price change from cached history (no network call)."""
+    try:
+        import market_cache
+
+        df = market_cache.get_price_history_stale(ticker, 1)
+        if df is None or df.empty or "Close" not in df.columns:
+            return {}
+        close = df["Close"].dropna()
+        if len(close) < 2:
+            return {}
+        last = float(close.iloc[-1])
+        out = {}
+        for label, back in (("change_1w", 5), ("change_1m", 21)):
+            if len(close) > back:
+                prev = float(close.iloc[-1 - back])
+                if prev:
+                    out[label] = round(last / prev - 1, 4)
+        return out
+    except Exception:
+        return {}
+
+
+def _portfolio_news(tickers: list[str]) -> list[dict]:
+    """Recent, real headlines across the holdings (deduped by title)."""
+    from yfinance_client import yf_ticker_news
+
+    seen: set[str] = set()
+    items: list[dict] = []
+    for tk in tickers:
+        for n in yf_ticker_news(tk, limit=4):
+            title = (n.get("title") or "").strip()
+            if title and title.lower() not in seen:
+                seen.add(title.lower())
+                items.append({"ticker": tk, **n})
+    return items[:16]
+
+
+def generate_portfolio_brief(portfolio_data: list[dict], macro: dict | None = None) -> str:
+    """AI weekly brief for all portfolio holdings, with macro + current-news context."""
+    from datetime import date
+
     try:
         if not portfolio_data:
             return "No portfolio holdings to brief."
 
+        holdings = []
+        for h in portfolio_data:
+            enriched = dict(h)
+            enriched.update(_holding_moves(str(h.get("ticker", ""))))
+            holdings.append(enriched)
+
+        tickers = [str(h.get("ticker", "")) for h in portfolio_data if h.get("ticker")]
+        context = {
+            "as_of": date.today().isoformat(),
+            "holdings": holdings,
+            "macro_context": macro or {},
+            "recent_news": _portfolio_news(tickers),
+        }
         prompt = PORTFOLIO_BRIEF_PROMPT.format(
-            data_json=json.dumps(portfolio_data, indent=2, default=str)
+            as_of=context["as_of"],
+            data_json=json.dumps(context, indent=2, default=str),
         )
-        text, _model = _llm_complete(PORTFOLIO_BRIEF_SYSTEM, prompt, max_tokens=1500)
+        text, _model = _llm_complete(
+            PORTFOLIO_BRIEF_SYSTEM, prompt, max_tokens=2000, gemini_search=True
+        )
         if not text:
             print("[error] AI: portfolio brief generation failed — using template")
             return _portfolio_brief_template(portfolio_data, reason="AI provider unavailable")
-        return f"# Weekly Portfolio Brief\n\n*AI-generated from current holdings and prices.*\n\n{text}"
+        return f"# Weekly Portfolio Brief\n\n*AI-generated from current holdings, macro data and news.*\n\n{text}"
     except Exception as e:
         print(f"[error] Portfolio brief generation failed: {e}")
         return _portfolio_brief_template(portfolio_data, reason=str(e))

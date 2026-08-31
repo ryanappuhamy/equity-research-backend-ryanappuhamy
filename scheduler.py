@@ -15,6 +15,7 @@ import schedule
 import ai_report
 import alerts
 import config
+import data_macro
 import portfolio
 import portfolio_risk
 
@@ -127,7 +128,7 @@ def run_weekly_brief() -> dict:
             return {"available": False, "note": note}
 
         risk = portfolio_risk.analyze_portfolio_risk(holdings)
-        brief = ai_report.generate_portfolio_brief(holdings)
+        brief = ai_report.generate_portfolio_brief(holdings, macro=data_macro.get_macro_context())
 
         portfolio_tickers = [h["ticker"] for h in holdings]
         triggered = alerts.check_alerts(portfolio_tickers)

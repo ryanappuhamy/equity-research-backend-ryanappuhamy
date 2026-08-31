@@ -1,5 +1,26 @@
 # Changelog — Equity Research Platform
 
+## 2026-08-31 — Weekly Brief: real news + macro, not portfolio-weight filler
+
+The brief only ever received the holdings JSON, so the model had nothing to say
+except restating weights ("MU is 57% of the portfolio", "heavy tech concentration").
+
+- `generate_portfolio_brief(holdings, macro=…)` now builds a real context:
+  FRED macro snapshot, per-holding 1w / 1m price change (from cached history,
+  no network call), and **`recent_news`** — real, dated headlines per holding
+  via `yfinance_client.yf_ticker_news()` (deduped, ~16 items).
+- Prompt rewritten: every market claim must trace to a `recent_news` item (or a
+  live search result); no training-memory recollection, no invented headlines;
+  weight/P&L restatement explicitly banned. New structure: *This Week in Context
+  → What Moved and Why → Risks to Watch → Bottom Line*.
+- Gemini calls for the brief attach the **Google Search grounding tool**
+  (`_llm_complete(..., gemini_search=True)`) — a bonus when the call lands on
+  Gemini; Groq / Claude work from the yfinance news alone.
+- `api.py` and `scheduler.py` pass `data_macro.get_macro_context()`.
+- Verified: brief now cites the US–Iran strike, NVDA's post-earnings "segmented
+  AI trade", Micron's Q4 setup, Apple's CEO transition, the September seasonality
+  pattern — all from real headlines, with publisher + date.
+
 ## 2026-08-31 — Weekly Brief "Regenerate" gives feedback
 
 The force path returned `cached_at: null`, so after a successful regenerate the
