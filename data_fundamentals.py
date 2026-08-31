@@ -227,54 +227,110 @@ def _fundamentals_alphavantage(ticker: str) -> dict:
 
 def get_fundamentals(ticker: str) -> dict:
     """
-    Key fundamental metrics. Alpha Vantage OVERVIEW first for P/E and revenue
-    growth; yfinance only if Alpha Vantage fails or those fields are empty.
+    Key fundamental metrics, merged across sources in priority order:
+    Alpha Vantage > Finnhub > yfinance. On cloud hosting Yahoo often 401s and
+    Alpha Vantage's shared-IP quota runs out, so Finnhub (works from any IP,
+    free) is the reliable middle tier.
     """
     ticker = ticker.upper()
-    av_key_set = bool(config.ALPHA_VANTAGE_API_KEY)
 
     cached = market_cache.get_fundamentals(ticker)
     if cached is not None:
-        print(
-            f"[fundamentals] {ticker}: using cache (source={cached.get('source', 'unknown')}); "
-            f"ALPHA_VANTAGE_API_KEY set={av_key_set}"
-        )
+        print(f"[fundamentals] {ticker}: cache (source={cached.get('source', 'unknown')})")
         return cached
 
-    print(
-        f"[fundamentals] {ticker}: Alpha Vantage primary, yfinance backfill; "
-        f"ALPHA_VANTAGE_API_KEY set={av_key_set}"
-    )
-
-    # yfinance is always fetched: it fills the many fields Alpha Vantage's
-    # OVERVIEW simply doesn't have (debt/equity, current ratio, net income, ...).
-    try:
-        yf = _fundamentals_yfinance(ticker)
-    except Exception as e:
-        print(f"[error] yfinance fundamentals failed for {ticker}: {e}")
-        yf = {"available": False}
-
-    av: dict = {"available": False}
-    if config.ALPHA_VANTAGE_API_KEY:
+    def _try(label, fn):
         try:
-            av = _fundamentals_alphavantage(ticker)
+            r = fn(ticker)
+            return r if isinstance(r, dict) else {"available": False}
         except Exception as e:
-            print(f"[error] Alpha Vantage fundamentals failed for {ticker}: {e}")
+            print(f"[error] {label} fundamentals failed for {ticker}: {e}")
+            return {"available": False}
 
-    if av.get("available") and yf.get("available"):
-        result = _merge_fundamentals(av, yf)
-    elif av.get("available"):
-        result = av
-    elif yf.get("available"):
-        result = yf
-    else:
-        note = f"Fundamentals collection failed for {ticker} (Alpha Vantage + yfinance)"
+    av = _try("Alpha Vantage", _fundamentals_alphavantage) if config.ALPHA_VANTAGE_API_KEY else {"available": False}
+    finn = _try("Finnhub", _fundamentals_finnhub) if config.FINNHUB_API_KEY else {"available": False}
+    yf = _try("yfinance", _fundamentals_yfinance)
+
+    ordered = [s for s in (av, finn, yf) if s.get("available")]
+    if not ordered:
+        note = f"Fundamentals collection failed for {ticker} (Alpha Vantage + Finnhub + yfinance)"
         print(f"[error] {note}")
         return {"available": False, "note": note}
 
+    result = _merge_many(ordered)
+    print(f"[fundamentals] {ticker}: source={result.get('source')}")
     _apply_financial_facts(result, ticker)
     market_cache.set_fundamentals(ticker, result)
     return result
+
+
+def _fundamentals_finnhub(ticker: str) -> dict:
+    """
+    Fundamentals from Finnhub's free `company_basic_financials` + `company_profile2`.
+    IP-independent — the reliable source when Yahoo 401s on cloud hosts.
+    """
+    client = _finnhub_client()
+    if client is None:
+        return {"available": False}
+
+    metric = (client.company_basic_financials(ticker.upper(), "all") or {}).get("metric") or {}
+    if not metric:
+        return {"available": False}
+
+    profile = {}
+    try:
+        profile = client.company_profile2(symbol=ticker.upper()) or {}
+    except Exception as e:
+        print(f"[warn] Finnhub company_profile2 failed for {ticker}: {e}")
+
+    def n(*keys):
+        for k in keys:
+            v = metric.get(k)
+            if isinstance(v, (int, float)):
+                return float(v)
+        return None
+
+    def pct(*keys):
+        v = n(*keys)
+        return round(v / 100, 4) if v is not None else None
+
+    shares = profile.get("shareOutstanding")  # millions
+    rev_ps = n("revenuePerShareTTM")
+    revenue_ttm = rev_ps * shares * 1_000_000 if (rev_ps and isinstance(shares, (int, float))) else None
+    mcap = profile.get("marketCapitalization") or metric.get("marketCapitalization")
+
+    return {
+        "available": True,
+        "source": "Finnhub",
+        "company_name": profile.get("name"),
+        "sector": profile.get("finnhubIndustry"),
+        "industry": profile.get("finnhubIndustry"),
+        "market_cap": mcap * 1_000_000 if isinstance(mcap, (int, float)) else None,
+        "pe_ttm": n("peTTM", "peBasicExclExtraTTM", "peExclExtraTTM"),
+        "forward_pe": n("forwardPE"),
+        "peg_ratio": n("pegTTM", "pegRatioTTM"),
+        "ev_ebitda": n("evEbitdaTTM", "currentEv/ebitdaTTM"),
+        "ev_revenue": n("evRevenueTTM"),
+        "price_to_book": n("pb", "pbAnnual", "pbQuarterly"),
+        "eps_growth_yoy": pct("epsGrowthTTMYoy"),
+        "gross_margin": pct("grossMarginTTM", "grossMarginAnnual"),
+        "operating_margin": pct("operatingMarginTTM", "operatingMarginAnnual"),
+        "net_margin": pct("netProfitMarginTTM", "netProfitMarginAnnual"),
+        "roe": pct("roeTTM", "roeRfy"),
+        "roic": pct("roiTTM"),
+        "debt_to_equity": n("totalDebt/totalEquityAnnual", "totalDebt/totalEquityQuarterly", "longTermDebt/equityAnnual"),
+        "current_ratio": n("currentRatioAnnual", "currentRatioQuarterly"),
+        "revenue_growth_yoy": pct("revenueGrowthTTMYoy", "revenueGrowthQuarterlyYoy"),
+        "revenue_yoy": pct("revenueGrowthTTMYoy"),
+        "net_income_yoy": pct("epsGrowthTTMYoy"),
+        "revenue_ttm": revenue_ttm,
+        "ebitda_ttm": None,
+        "net_income_ttm": None,
+        "week_52_high": n("52WeekHigh"),
+        "week_52_low": n("52WeekLow"),
+        "fcf_yield": None,
+        "dividend_yield": pct("dividendYieldIndicatedAnnual", "currentDividendYieldTTM"),
+    }
 
 
 def _apply_financial_facts(result: dict, ticker: str) -> None:
@@ -297,21 +353,29 @@ def _apply_financial_facts(result: dict, ticker: str) -> None:
         result["fcf_yield"] = round(fcf / mcap, 4)
 
 
-def _merge_fundamentals(primary: dict, yf: dict) -> dict:
-    """Prefer primary source values where present; fill gaps from yfinance."""
-    if not yf.get("available"):
-        return primary
-    merged = dict(yf)
-    for key, val in primary.items():
-        if val is not None and key not in ("source", "note", "available"):
-            merged[key] = val
-    merged["available"] = True
-    sources: list[str] = []
-    if primary.get("available"):
-        sources.append(primary.get("source", "Alpha Vantage"))
-    if yf.get("available"):
-        sources.append("yfinance")
-    merged["source"] = "+".join(sources) if len(sources) > 1 else (sources[0] if sources else "unknown")
+_META_KEYS = ("source", "note", "available")
+
+
+def _merge_many(sources: list[dict]) -> dict:
+    """
+    Merge fundamentals dicts in priority order (first = highest priority).
+    For each field the first source with a non-None value wins; the rest fill gaps.
+    """
+    merged: dict = {"available": True}
+    used: list[str] = []
+    for src in sources:
+        if not src.get("available"):
+            continue
+        contributed = False
+        for key, val in src.items():
+            if key in _META_KEYS or val is None:
+                continue
+            if merged.get(key) is None:
+                merged[key] = val
+                contributed = True
+        if contributed:
+            used.append(src.get("source", "unknown"))
+    merged["source"] = "+".join(dict.fromkeys(used)) or "unknown"
     return merged
 
 

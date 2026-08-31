@@ -1,5 +1,23 @@
 # Changelog — Equity Research Platform
 
+## 2026-08-31 — Finnhub fundamentals fallback (fixes cloud "Unauthorized")
+
+On Render, Yahoo Finance now returns `401 Unauthorized` from datacenter IPs and
+Alpha Vantage's shared-IP quota (25/day) is exhausted — so `get_fundamentals`
+was returning "Fundamentals collection failed" for any uncached ticker, and a raw
+Yahoo 401 could surface to the user.
+
+- New `_fundamentals_finnhub()` — Finnhub's free `company_basic_financials` +
+  `company_profile2`. IP-independent, so it works on cloud hosts. Covers P/E,
+  forward P/E, PEG, EV/EBITDA, EV/Rev, P/B, all margins, ROE, ROIC,
+  **debt/equity, current ratio**, revenue & EPS growth, 52-week range, dividend
+  yield, company name + industry.
+- `get_fundamentals` now merges **Alpha Vantage > Finnhub > yfinance** via a
+  generic `_merge_many()` (first non-None wins, rest fill gaps). Any source
+  failing is caught and skipped — no provider error reaches the caller.
+- Verified: with yfinance fully blocked (simulated 401), NVDA fundamentals still
+  come back complete from AV + Finnhub.
+
 ## 2026-08-31 — Weekly Brief: real news + macro, not portfolio-weight filler
 
 The brief only ever received the holdings JSON, so the model had nothing to say
