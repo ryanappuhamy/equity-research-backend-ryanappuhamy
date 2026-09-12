@@ -1,0 +1,3 @@
+# Shell scripts must keep Unix line endings (LF) — CRLF breaks the shebang
+# and can break comparisons on macOS/Linux. This overrides core.autocrlf.
+*.sh text eol=lf
