@@ -146,8 +146,12 @@ def get_fundamentals_sectors(tickers: list[str]) -> dict[str, str | None]:
     return sectors
 
 
-def get_sectors(tickers: list[str]) -> dict[str, str | None]:
-    """Return sector from dedicated sector cache rows (30-day TTL). Missing/stale → None."""
+def get_sectors(tickers: list[str], allow_stale: bool = False) -> dict[str, str | None]:
+    """Return sector from dedicated sector cache rows (30-day TTL). Missing/stale → None.
+
+    allow_stale=True ignores the TTL — a last resort when every live source fails
+    (a company's sector essentially never changes).
+    """
     if not tickers:
         return {}
     tickers = [t.upper() for t in tickers]
@@ -164,7 +168,7 @@ def get_sectors(tickers: list[str]) -> dict[str, str | None]:
                 .all()
             )
             for row in rows:
-                if not _is_fresh(row.fetched_at, SECTOR_CACHE_TTL_SECONDS):
+                if not allow_stale and not _is_fresh(row.fetched_at, SECTOR_CACHE_TTL_SECONDS):
                     continue
                 try:
                     payload = json.loads(row.payload)

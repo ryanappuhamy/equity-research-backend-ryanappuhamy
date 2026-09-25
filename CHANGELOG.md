@@ -1,5 +1,22 @@
 # Changelog — Equity Research Platform
 
+## 2026-09-25 — Portfolio: sector "Unknown" + risk contribution "0%" fixed
+
+**Sector "Unknown" (NVDA, AAPL).** `_resolve_sectors` tried fundamentals cache →
+sector cache (30-day TTL) → yfinance. Tickers without a fundamentals row (AAPL)
+depended on the sector cache; once it expired, the refresh went to yfinance,
+which 401s from Render's IPs → `null` → "Unknown" in the donut. Now, after
+yfinance: the last known sector is used even past its TTL
+(`market_cache.get_sectors(..., allow_stale=True)`), then Finnhub
+`company_profile2` (IP-independent), with `finnhubIndustry` mapped to Yahoo-style
+sectors so NVDA ("Semiconductors") still groups under Technology. Verified with
+yfinance forced to fail: fresh cache, expired cache and empty cache all resolve.
+
+**Risk contribution "AAPL 0%" (frontend).** Not a calculation bug — the backend
+returns 0.32%. `RiskBar` did `Math.round(pct * 100)`, so anything under 0.5%
+showed as "0%". The label now uses `fmtPercent` (one decimal) and the bar width
+is no longer rounded (frontend `components/data/risk-bar.tsx`).
+
 ## 2026-09-25 — start-local.sh: fix crash on macOS bash 3.2
 
 macOS ships bash 3.2, where `"${RELOAD_ARGS[@]}"` on an empty array under

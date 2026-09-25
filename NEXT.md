@@ -16,8 +16,6 @@ If Supabase is paused (free tier sleeps after ~1 week idle), resume it from the 
 ## Open items
 
 - [ ] **Supabase RLS** — verify every table has row-level security with service_role policies. Deferred; Ryan's call on priority.
-- [ ] **Sector "Unknown" bug** — NVDA + AAPL sometimes resolve to "Unknown" instead of "Technology" in the portfolio sector donut. Inconsistent lookup in `portfolio.get_fundamentals_sectors` / `yfinance_client.yf_ticker_sector` (MU resolves fine, others don't).
-- [ ] **Risk contribution: AAPL shows 0%** — should be small but non-zero. Check `portfolio_risk.analyze_portfolio_risk`.
 - [ ] **`/dev` diagnostics tab** — password-gated page: live provider health probe, config view, cache stats, optional API call-count history. ~2-3h for the light version. Spec in Claude's memory (`equity-research-todo-dev-tab`).
 
 ## Known limitations (not bugs — need money or scope)

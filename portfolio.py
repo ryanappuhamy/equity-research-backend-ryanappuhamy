@@ -209,17 +209,100 @@ def _resolve_sectors(tickers: list[str]) -> dict[str, str | None]:
                 sectors[ticker] = cached[ticker]
 
     for ticker in [t for t in stock_tickers if not sectors.get(t)]:
+        fetched = None
         try:
             fetched = yf_ticker_sector(ticker)
         except Exception as e:
             print(f"[error] yfinance sector fetch failed for {ticker}: {e}")
-            continue
+        if fetched:
+            cached = market_cache.set_sector(ticker, fetched)
+            if cached:
+                sectors[ticker] = cached
+
+    # yfinance 401s from cloud IPs (Render): fall back to the last known sector,
+    # even past its TTL, then to Finnhub (IP-independent) — never "Unknown" for a
+    # ticker we have ever resolved.
+    missing = [t for t in stock_tickers if not sectors.get(t)]
+    if missing:
+        stale = market_cache.get_sectors(missing, allow_stale=True)
+        for ticker in missing:
+            if stale.get(ticker):
+                sectors[ticker] = stale[ticker]
+
+    for ticker in [t for t in stock_tickers if not sectors.get(t)]:
+        fetched = _finnhub_sector(ticker)
         if fetched:
             cached = market_cache.set_sector(ticker, fetched)
             if cached:
                 sectors[ticker] = cached
 
     return sectors
+
+
+# Finnhub's `finnhubIndustry` is finer-grained than Yahoo's sectors; map the
+# common ones so the sector donut doesn't split e.g. NVDA ("Semiconductors")
+# from AAPL ("Technology"). Unmapped industries pass through as-is.
+_FINNHUB_INDUSTRY_TO_SECTOR = {
+    "technology": "Technology",
+    "semiconductors": "Technology",
+    "electrical equipment": "Technology",
+    "communications": "Communication Services",
+    "telecommunication": "Communication Services",
+    "media": "Communication Services",
+    "banking": "Financial Services",
+    "financial services": "Financial Services",
+    "insurance": "Financial Services",
+    "pharmaceuticals": "Healthcare",
+    "biotechnology": "Healthcare",
+    "health care": "Healthcare",
+    "life sciences tools & services": "Healthcare",
+    "retail": "Consumer Cyclical",
+    "automobiles": "Consumer Cyclical",
+    "hotels, restaurants & leisure": "Consumer Cyclical",
+    "textiles, apparel & luxury goods": "Consumer Cyclical",
+    "leisure products": "Consumer Cyclical",
+    "beverages": "Consumer Defensive",
+    "food products": "Consumer Defensive",
+    "tobacco": "Consumer Defensive",
+    "consumer products": "Consumer Defensive",
+    "energy": "Energy",
+    "utilities": "Utilities",
+    "real estate": "Real Estate",
+    "chemicals": "Basic Materials",
+    "metals & mining": "Basic Materials",
+    "packaging": "Basic Materials",
+    "paper & forest": "Basic Materials",
+    "aerospace & defense": "Industrials",
+    "airlines": "Industrials",
+    "machinery": "Industrials",
+    "construction": "Industrials",
+    "building": "Industrials",
+    "logistics & transportation": "Industrials",
+    "road & rail": "Industrials",
+    "marine": "Industrials",
+    "industrial conglomerates": "Industrials",
+    "commercial services & supplies": "Industrials",
+    "professional services": "Industrials",
+    "trading companies & distributors": "Industrials",
+}
+
+
+def _finnhub_sector(ticker: str) -> str | None:
+    import config
+
+    if not config.FINNHUB_API_KEY:
+        return None
+    try:
+        import finnhub
+
+        profile = finnhub.Client(api_key=config.FINNHUB_API_KEY).company_profile2(symbol=ticker.upper()) or {}
+    except Exception as e:
+        print(f"[error] Finnhub sector fetch failed for {ticker}: {e}")
+        return None
+    industry = (profile.get("finnhubIndustry") or "").strip()
+    if not industry or industry.upper() == "N/A":
+        return None
+    return _FINNHUB_INDUSTRY_TO_SECTOR.get(industry.lower(), industry)
 
 
 def get_portfolio(portfolio_name: str = DEFAULT_PORTFOLIO_NAME) -> list[dict]:
