@@ -1,5 +1,13 @@
 # Changelog — Equity Research Platform
 
+## 2026-09-25 — start-local.sh: fix crash on macOS bash 3.2
+
+macOS ships bash 3.2, where `"${RELOAD_ARGS[@]}"` on an empty array under
+`set -u` aborts with `RELOAD_ARGS[@]: unbound variable` — so `./start-local.sh`
+(without `--reload`) never started uvicorn on a Mac. Now expanded as
+`${RELOAD_ARGS[@]+"${RELOAD_ARGS[@]}"}`. Script is also committed as executable,
+so no `chmod +x` needed after a fresh clone.
+
 ## 2026-08-31 — Alerts page: don't block the list on the slow check
 
 The whole Alerts page rendered a skeleton while `useAlertsCheck()` was pending —

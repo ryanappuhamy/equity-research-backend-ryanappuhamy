@@ -44,4 +44,4 @@ fi
 echo ""
 echo "Avvio backend su http://localhost:8000 (docs: http://localhost:8000/docs)"
 echo ""
-exec venv/bin/python -m uvicorn api:app --host 0.0.0.0 --port 8000 "${RELOAD_ARGS[@]}"
+exec venv/bin/python -m uvicorn api:app --host 0.0.0.0 --port 8000 ${RELOAD_ARGS[@]+"${RELOAD_ARGS[@]}"}
