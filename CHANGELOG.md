@@ -1,5 +1,24 @@
 # Changelog — Equity Research Platform
 
+## 2026-10-02 — Redesign (frontend) + new endpoints for it
+
+Whole frontend restyled after an approved prototype (dark Revolut / Trade Republic
+look, pill tabs with a bottom bar on phones, animations). Portfolio page rebuilt:
+hero value with today's and total P&L, scrubbable chart with benchmark picker,
+expandable holdings, portfolio health, gain contribution, tax estimate by country,
+information and news feeds. New PAC simulator page (historical and Monte Carlo).
+Rollback point: tag `pre-redesign` in both repos.
+
+Backend, additive only (old frontend keeps working):
+- `GET /portfolio/insights` (`portfolio_insights.py`): per holding today's move,
+  52-week range, P/E, dividend yield, analyst consensus, next earnings, filtered
+  news, 1-month sparkline. Finnhub first; yfinance only for price targets and the
+  S&P 500 P/E. Cached 15 min per ticker. Finnhub news is filtered to headlines that
+  name the holding (raw results are mostly unrelated).
+- `GET /market/monthly?ticker=` (`market_history.py`): 15 years of monthly closes
+  for the simulator, cached 1 day.
+- `URTH` (MSCI World) and `VT` (All-World) added to the performance benchmarks.
+
 ## 2026-09-25 — Portfolio: sector "Unknown" + risk contribution "0%" fixed
 
 **Sector "Unknown" (NVDA, AAPL).** `_resolve_sectors` tried fundamentals cache →

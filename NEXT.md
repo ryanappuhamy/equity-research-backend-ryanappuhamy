@@ -6,14 +6,18 @@ For the history of what's *done*, see `CHANGELOG.md`. This file is only the open
 
 1. `git pull` in both `backend/` and `frontend/`.
 2. Make sure `backend/.env` and `frontend/.env.local` exist (they're gitignored — Ryan has copies).
-3. `cd backend && python -m venv venv && venv\Scripts\python -m pip install -r requirements.txt`
+3. `cd backend && python3 -m venv venv && venv/bin/pip install -r requirements.txt`
 4. `cd frontend && npm install`
-5. Run: `backend\start-local.ps1`  and  `cd frontend && npm run dev`  →  :8000 / :3000
+5. Run: `backend/start-local.sh` (Windows: `backend\start-local.ps1`) and `cd frontend && npm run dev` → :8000 / :3000
 6. Tell Claude: "read NEXT.md and the top of CHANGELOG.md".
 
 If Supabase is paused (free tier sleeps after ~1 week idle), resume it from the dashboard — the connection string is unchanged.
 
 ## Open items
+
+- [ ] **Weekly brief truncated** — the brief cached on 2026-10-02 stops after one sentence (161 chars). Look at the AI chain in `ai_report.py` (provider output length / max tokens) before regenerating.
+- [ ] **Transactions ledger** — store each buy/sell with date (realized P&L, exact taxes, real performance chart instead of the current-holdings backtest).
+- [ ] **Data sources** — move price history off yfinance (Render IPs get 401): Tiingo or Twelve Data; fundamentals from SEC EDGAR companyfacts.
 
 - [ ] **Supabase RLS** — verify every table has row-level security with service_role policies. Deferred; Ryan's call on priority.
 - [ ] **`/dev` diagnostics tab** — password-gated page: live provider health probe, config view, cache stats, optional API call-count history. ~2-3h for the light version. Spec in Claude's memory (`equity-research-todo-dev-tab`).
