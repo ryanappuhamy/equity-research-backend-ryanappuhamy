@@ -18,7 +18,7 @@ from yfinance_client import yf_download
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
 DEFAULT_BENCHMARK = "SPY"
-ALLOWED_BENCHMARKS = frozenset({"SPY", "QQQ", "SOXX", "VTI"})
+ALLOWED_BENCHMARKS = frozenset({"SPY", "QQQ", "SOXX", "VTI", "URTH", "VT"})
 MAX_LOOKBACK_DAYS = config.PRICE_LOOKBACK_YEARS * 365
 
 

@@ -20,6 +20,7 @@ import config
 import data_macro
 import main
 import portfolio
+import portfolio_insights
 import portfolio_performance
 import portfolio_risk
 import market_cache
@@ -53,6 +54,7 @@ app.add_middleware(
 )
 
 app.include_router(portfolio_performance.router)
+app.include_router(portfolio_insights.router)
 
 
 @app.get("/health")
