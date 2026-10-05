@@ -50,7 +50,9 @@ def _get_cik(ticker: str) -> str | None:
 def get_insider_activity(ticker: str, months_back: int = 6) -> dict:
     """Recent Form 4 filings with parsed buy/sell transactions when available."""
     ticker = ticker.upper()
-    cache_key = f"{months_back}m"
+    # Bump the version when the parsing changes, so rows cached by the old
+    # parser are ignored instead of served for another 24 h.
+    cache_key = f"{months_back}m-v2"
     cached = market_cache.get_insider_activity(ticker, cache_key)
     if cached is not None:
         return cached

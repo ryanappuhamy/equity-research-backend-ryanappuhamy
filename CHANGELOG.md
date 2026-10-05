@@ -21,7 +21,9 @@ Frontend (`components/data/insider-activity-table.tsx`): actions are no longer
 forced into Buy/Sell (unknown values used to default to "Sell"); badges are green
 for Buy, red for Sell, neutral for grants, exercises and tax withholding. Share
 counts are no longer prefixed with "$". Reports cached before this change keep the
-old labels until they expire (24 h) or are regenerated.
+old labels until they are regenerated. The insider cache key is now versioned
+(`6m-v2`) so rows parsed by the old code are ignored: "Regenerate" alone was not
+enough, because insider activity has its own 24 h cache next to the report cache.
 
 ## 2026-10-02 — Redesign (frontend) + new endpoints for it
 
