@@ -1,5 +1,25 @@
 # Changelog — Equity Research Platform
 
+## 2026-10-05 — SEC requests throttled, insider notes, and per-ticker news
+
+- All SEC EDGAR calls go through `sec_request()`: at most ~8 requests/second
+  and a backoff on 429, instead of failing the lookup. A bulk test of 46 tickers
+  without throttling got the IP blocked for ~10 minutes; the throttled run of 20
+  tickers finished in 73 s with no block.
+- SEC's ticker-to-CIK file is kept in memory for a day (it was downloaded,
+  ~1 MB, on every lookup). `BRK.B` now maps to SEC's `BRK-B`.
+- The filing index is only fetched when the direct XML names fail.
+- Transient SEC errors (timeouts, 429) are no longer cached for 24 h; insider
+  cache key bumped to `v3` so rows from the old parser are ignored.
+- Clear notes when there is nothing to show: unknown ticker / ETF without a
+  filer, ETFs and funds, foreign issuers on Form 20-F.
+- SEC needs an email in the User-Agent (403 otherwise). Set `SEC_USER_AGENT`
+  on Render to "Name your@email" to replace the placeholder.
+- New `GET /news/{ticker}` (`ticker_news.py`): last 14 days of Finnhub news
+  that name the company (whole-word match; two-word key for generic names such
+  as "Western Digital"), with a short summary, cached 30 min. Portfolio insights
+  reuse the same filter. Shown as "Recent news" on the Research page.
+
 ## 2026-10-05 — Insider activity: parse filings from all filer agents (fixes empty table for WDC)
 
 WDC showed "73 Form 4 filings" but no transactions. Its filer agent lists the

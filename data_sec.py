@@ -445,10 +445,14 @@ def _fetch_insider_activity(ticker: str, months_back: int) -> dict:
         form4_dates = [filing_date for _, filing_date, _ in form4_filings]
 
         if not form4_dates:
-            note = (
-                f"No insider filings (Form 4) for {ticker} in the last {months_back} months. "
-                "Foreign issuers that report on Form 20-F are exempt from Form 4."
-            )
+            form_types = set(forms)
+            if form_types & {"20-F", "40-F", "6-K"}:
+                reason = " Foreign issuers that report on Form 20-F are exempt from Form 4."
+            elif not form_types & {"10-K", "10-Q"}:
+                reason = " ETFs and funds don't file Form 4."
+            else:
+                reason = ""
+            note = f"No insider filings (Form 4) for {ticker} in the last {months_back} months.{reason}"
         else:
             note = (
                 "Form 4 = insider transaction filing. Includes open-market trades (P/S), "
