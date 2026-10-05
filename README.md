@@ -33,7 +33,7 @@ Sites like Yahoo Finance and Investing.com excel at *browsing* markets. This pro
 | `config.py` | Environment-based API keys and analysis settings |
 | `api.py` | FastAPI REST server for reports, portfolio, alerts |
 | `data_fundamentals.py` | Prices (yfinance) + fundamentals (FMP primary, yfinance fallback) |
-| `data_sec.py` | SEC EDGAR Form 4 insider activity |
+| `data_sec.py` | SEC EDGAR Form 4 insider activity (labelled by transaction code: open-market buys/sells vs grants, exercises, tax withholding) |
 | `data_earnings.py` | SEC EDGAR 8-K earnings transcripts / EX-99 exhibits |
 | `data_macro.py` | FRED macro context (rates, CPI, unemployment) |
 | `peer_comparison.py` | Comps table + relative valuation vs peer median |

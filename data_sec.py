@@ -110,28 +110,24 @@ def _transaction_total_value(tx: ET.Element) -> float | None:
     return None
 
 
-def _action_label(code: str | None, acquired_disposed: str | None) -> str | None:
+# Label by the Form 4 transaction code, not the acquired/disposed flag: an RSU
+# grant (A) or a vesting (M) is "acquired" but is not an open-market buy, and
+# shares withheld for tax (F) are "disposed" but are not a sale.
+CODE_LABELS = {
+    "P": "Buy",
+    "S": "Sell",
+    "A": "Award",
+    "M": "Exercise",
+    "F": "Tax withholding",
+    "D": "Disposition",
+}
+
+
+def _action_label(code: str | None) -> str | None:
     normalized_code = (code or "").upper()
-    if normalized_code not in INCLUDED_TRANSACTION_CODES and acquired_disposed not in {
-        "A",
-        "D",
-    }:
+    if normalized_code not in INCLUDED_TRANSACTION_CODES:
         return None
-
-    if acquired_disposed == "A":
-        return "Buy"
-    if acquired_disposed == "D":
-        return "Sell"
-
-    code_labels = {
-        "P": "Buy",
-        "S": "Sell",
-        "A": "Award",
-        "D": "Disposition",
-        "F": "Tax withholding",
-        "M": "Option exercise",
-    }
-    return code_labels.get(normalized_code)
+    return CODE_LABELS.get(normalized_code)
 
 
 def _owner_role(root: ET.Element) -> str:
@@ -190,17 +186,16 @@ def _parse_form4_xml(xml_text: str, filing_date: str) -> list[dict]:
     role = _owner_role(root)
     transactions: list[dict] = []
 
-    for tx in list(_iter_transactions(root, "nonDerivativeTable")) + list(
-        _iter_transactions(root, "derivativeTable")
-    ):
-        code = _nested_text(tx, "transactionCoding", "transactionCode")
-        acquired_disposed = _nested_text(
-            tx,
-            "transactionAmounts",
-            "transactionAcquiredDisposedCode",
-            "value",
-        )
-        action = _action_label(code, acquired_disposed)
+    rows = [(tx, False) for tx in _iter_transactions(root, "nonDerivativeTable")] + [
+        (tx, True) for tx in _iter_transactions(root, "derivativeTable")
+    ]
+    for tx, is_derivative in rows:
+        code = (_nested_text(tx, "transactionCoding", "transactionCode") or "").upper()
+        # An exercise or RSU vesting is reported twice: the derivative leg (the
+        # unit going away) and the common-stock leg. Keep only the stock leg.
+        if is_derivative and code == "M":
+            continue
+        action = _action_label(code)
         if action is None:
             continue
 
@@ -238,6 +233,7 @@ def _parse_form4_xml(xml_text: str, filing_date: str) -> list[dict]:
                 "role": role,
                 "action": action,
                 "transaction_type": action,
+                "code": code,
                 "amount": amount,
                 "shares": shares,
                 "dollar_value": dollar_value,
@@ -246,7 +242,33 @@ def _parse_form4_xml(xml_text: str, filing_date: str) -> list[dict]:
             }
         )
 
-    return transactions
+    return _merge_same_day(transactions)
+
+
+def _merge_same_day(transactions: list[dict]) -> list[dict]:
+    """One filing often splits an event into several lines (a sale in lots,
+    time- and performance-based RSU grants). Sum lines with the same action
+    and date so the table shows one row per insider per event."""
+    merged: dict[tuple[str, str], dict] = {}
+    for tx in transactions:
+        key = (tx["action"], tx["date"])
+        if key not in merged:
+            merged[key] = dict(tx)
+            continue
+        row = merged[key]
+        if tx["shares"] is not None:
+            row["shares"] = (row["shares"] or 0) + tx["shares"]
+        if row["dollar_value"] is not None and tx["dollar_value"] is not None:
+            row["dollar_value"] = round(row["dollar_value"] + tx["dollar_value"], 2)
+        else:
+            row["dollar_value"] = None
+
+    for row in merged.values():
+        if row["dollar_value"] is not None and row["dollar_value"] > 0:
+            row["amount"] = row["dollar_value"]
+        elif row["shares"]:
+            row["amount"] = _format_shares(row["shares"])
+    return list(merged.values())
 
 
 def _sec_get(url: str, timeout: int = 20) -> requests.Response | None:

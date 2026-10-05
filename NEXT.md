@@ -15,6 +15,7 @@ If Supabase is paused (free tier sleeps after ~1 week idle), resume it from the 
 
 ## Open items
 
+- [ ] **NVDA insider activity empty** — `data_sec.py` finds 36 Form 4 filings in 6 months but parses none (also before the 2026-10-05 fix). Probably the XML candidate lookup (`_xml_candidates`) never reaches the raw XML for these filings.
 - [ ] **Weekly brief truncated** — the brief cached on 2026-10-02 stops after one sentence (161 chars). Look at the AI chain in `ai_report.py` (provider output length / max tokens) before regenerating.
 - [ ] **Transactions ledger** — store each buy/sell with date (realized P&L, exact taxes, real performance chart instead of the current-holdings backtest).
 - [ ] **Data sources** — move price history off yfinance (Render IPs get 401): Tiingo or Twelve Data; fundamentals from SEC EDGAR companyfacts.

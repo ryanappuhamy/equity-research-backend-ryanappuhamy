@@ -1,5 +1,28 @@
 # Changelog — Equity Research Platform
 
+## 2026-10-05 — Insider activity: label by Form 4 code, merge split lines
+
+The research page showed RSU grants as insider "Buy"s ("Buy $47,645 shares",
+four executives on the same day) and listed some rows twice. Checked against
+Apple's real Form 4 XML:
+- `_action_label` used the acquired/disposed flag (A/D) before the transaction
+  code, so every RSU grant (code **A**, price 0, derivative table) became "Buy"
+  and shares withheld for tax (code **F**) became "Sell". The label now comes from
+  the code only: P Buy, S Sell, A Award, M Exercise, F Tax withholding,
+  D Disposition. Each row also carries `code`.
+- Vestings and exercises (code M) are reported on both the derivative and the
+  common-stock table; the derivative leg is now skipped.
+- The "duplicates" were real: one filing often has two RSU grants of the same
+  size (time- and performance-based) or a sale in several lots. Lines with the
+  same action and date in a filing are now summed into one row
+  (`_merge_same_day`), e.g. Apple executives: one "Award 95,290 shares" row.
+
+Frontend (`components/data/insider-activity-table.tsx`): actions are no longer
+forced into Buy/Sell (unknown values used to default to "Sell"); badges are green
+for Buy, red for Sell, neutral for grants, exercises and tax withholding. Share
+counts are no longer prefixed with "$". Reports cached before this change keep the
+old labels until they expire (24 h) or are regenerated.
+
 ## 2026-10-02 — Redesign (frontend) + new endpoints for it
 
 Whole frontend restyled after an approved prototype (dark Revolut / Trade Republic
