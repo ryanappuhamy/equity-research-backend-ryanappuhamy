@@ -14,6 +14,7 @@ import data_fundamentals
 import market_cache
 import portfolio
 from ratelimit import limiter
+from ticker_news import relevant_news
 from yfinance_client import yf_analyst_price_targets, yf_ticker_info
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
@@ -21,25 +22,6 @@ router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 INSIGHTS_TTL_SECONDS = 15 * 60
 INDEX_PE_TTL_SECONDS = 24 * 3600
 SPARK_DAYS = 22
-
-# Finnhub's company_news is noisy (a NVDA query returns Robinhood/Chipotle
-# pieces). Keep only headlines that name the holding.
-_NEWS_KEYWORDS = {
-    "SPY": ["s&p 500", "s&p500", "spy "],
-    "QQQ": ["nasdaq", "qqq"],
-}
-
-
-def _news_keywords(ticker: str, name: str | None) -> list[str]:
-    if ticker in _NEWS_KEYWORDS:
-        return _NEWS_KEYWORDS[ticker]
-    words = [ticker.lower()]
-    if name:
-        first = name.split()[0].strip(",.").lower()
-        if len(first) > 2:
-            words.append(first)
-    return words
-
 
 def _num(v) -> float | None:
     return float(v) if isinstance(v, (int, float)) else None
@@ -96,13 +78,7 @@ def _ticker_insights(client, ticker: str) -> dict:
 
     try:
         raw = client.company_news(ticker, _from=str(today - dt.timedelta(days=6)), to=str(today)) or []
-        kws = _news_keywords(ticker, out.get("name"))
-        news = [
-            {"headline": n["headline"], "source": n.get("source"), "url": n.get("url"), "datetime": n.get("datetime")}
-            for n in raw
-            if n.get("headline") and any(k in f" {n['headline'].lower()} " for k in kws)
-        ]
-        out["news"] = news[:3]
+        out["news"] = relevant_news(raw, ticker, out.get("name"), 3)
     except Exception as e:
         print(f"[warn] Finnhub news failed for {ticker}: {e}")
         out["news"] = []

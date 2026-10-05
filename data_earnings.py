@@ -12,7 +12,7 @@ import requests
 from requests.exceptions import RequestException, Timeout
 
 import market_cache
-from data_sec import _get_cik, SEC_HEADERS
+from data_sec import _get_cik, sec_request
 
 ARCHIVES_BASE = "https://www.sec.gov/Archives/edgar/data"
 
@@ -75,7 +75,7 @@ def _fetch_filing_index(cik_int: int, accession: str) -> str | None:
     try:
         acc_nodash = accession.replace("-", "")
         url = f"{ARCHIVES_BASE}/{cik_int}/{acc_nodash}/{accession}-index.htm"
-        r = requests.get(url, headers=SEC_HEADERS, timeout=20)
+        r = sec_request(url, timeout=20)
         if r.status_code != 200:
             return None
         return r.text
@@ -94,7 +94,7 @@ def _download_exhibit(cik_int: int, accession: str, filename: str) -> str | None
     try:
         acc_nodash = accession.replace("-", "")
         url = f"{ARCHIVES_BASE}/{cik_int}/{acc_nodash}/{filename}"
-        r = requests.get(url, headers=SEC_HEADERS, timeout=30)
+        r = sec_request(url, timeout=30)
         if r.status_code != 200:
             print(f"[error] SEC EDGAR: exhibit download returned HTTP {r.status_code} for {filename}")
             return None
@@ -137,7 +137,7 @@ def _fetch_earnings_transcript(ticker: str, max_filings: int) -> dict:
 
         cik_int = int(cik)
         url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-        r = requests.get(url, headers=SEC_HEADERS, timeout=20)
+        r = sec_request(url, timeout=20)
         r.raise_for_status()
         recent = r.json().get("filings", {}).get("recent", {})
 

@@ -24,6 +24,7 @@ import portfolio
 import portfolio_insights
 import portfolio_performance
 import portfolio_risk
+import ticker_news
 import market_cache
 from database import init_db
 from ratelimit import limiter
@@ -57,6 +58,7 @@ app.add_middleware(
 app.include_router(portfolio_performance.router)
 app.include_router(portfolio_insights.router)
 app.include_router(market_history.router)
+app.include_router(ticker_news.router)
 
 
 @app.get("/health")

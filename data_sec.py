@@ -7,35 +7,80 @@ SEC requires a User-Agent header identifying you (any email works).
 
 from __future__ import annotations
 
+import os
+import threading
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 
 import requests
-from requests.exceptions import RequestException, Timeout
+from requests.exceptions import HTTPError, RequestException, Timeout
 
 import market_cache
 
+# SEC requires "Name email" in the User-Agent and answers 403 without an
+# email. Set SEC_USER_AGENT (e.g. "EquityResearch you@yourmail.com") on Render.
 SEC_HEADERS = {
-    "User-Agent": "EquityResearchProject contact@example.com",
+    "User-Agent": os.getenv("SEC_USER_AGENT", "EquityResearchProject contact@example.com"),
 }
+
+# SEC fair-access limit is 10 requests/second per client; stay under it and
+# back off on 429 instead of failing the whole lookup.
+_MIN_INTERVAL_S = 0.125
+_MAX_RETRIES = 3
+_rate_lock = threading.Lock()
+_last_request_at = 0.0
+
+
+def sec_request(url: str, timeout: int = 20) -> requests.Response:
+    """GET an SEC URL, throttled and retried on 429. Raises on other HTTP errors."""
+    global _last_request_at
+    for attempt in range(_MAX_RETRIES + 1):
+        with _rate_lock:
+            wait = _MIN_INTERVAL_S - (time.monotonic() - _last_request_at)
+            if wait > 0:
+                time.sleep(wait)
+            _last_request_at = time.monotonic()
+        r = requests.get(url, headers=SEC_HEADERS, timeout=timeout)
+        if r.status_code != 429 or attempt == _MAX_RETRIES:
+            r.raise_for_status()
+            return r
+        retry_after = r.headers.get("Retry-After")
+        time.sleep(float(retry_after) if retry_after and retry_after.isdigit() else 2 ** attempt)
+    raise RuntimeError("unreachable")
 
 MAX_FILINGS_TO_PARSE = 12
 MAX_TRANSACTIONS = 8
 INCLUDED_TRANSACTION_CODES = frozenset({"P", "S", "A", "D", "F", "M"})
 
 
+_CIK_MAP_TTL_S = 24 * 3600
+_cik_map: dict[str, str] = {}
+_cik_map_at = 0.0
+
+
+def _lookup_cik(ticker: str) -> str | None:
+    """Ticker -> CIK from SEC's mapping file (kept in memory for a day).
+
+    Returns None only when SEC doesn't know the ticker; network errors raise,
+    so callers can tell "no such filer" from "SEC unreachable".
+    """
+    global _cik_map, _cik_map_at
+    if not _cik_map or time.monotonic() - _cik_map_at > _CIK_MAP_TTL_S:
+        data = sec_request("https://www.sec.gov/files/company_tickers.json").json()
+        _cik_map = {entry["ticker"].upper(): str(entry["cik_str"]).zfill(10) for entry in data.values()}
+        _cik_map_at = time.monotonic()
+    # SEC writes share classes with a dash: BRK.B -> BRK-B.
+    return _cik_map.get(ticker.upper()) or _cik_map.get(ticker.upper().replace(".", "-"))
+
+
 def _get_cik(ticker: str) -> str | None:
     """Map ticker -> CIK number using SEC's official mapping file."""
     try:
-        url = "https://www.sec.gov/files/company_tickers.json"
-        r = requests.get(url, headers=SEC_HEADERS, timeout=20)
-        r.raise_for_status()
-        data = r.json()
-        for entry in data.values():
-            if entry["ticker"].upper() == ticker.upper():
-                return str(entry["cik_str"]).zfill(10)
-        print(f"[error] SEC EDGAR: CIK not found for ticker {ticker}")
-        return None
+        cik = _lookup_cik(ticker)
+        if cik is None:
+            print(f"[error] SEC EDGAR: CIK not found for ticker {ticker}")
+        return cik
     except Timeout:
         print(f"[error] SEC EDGAR: timeout fetching CIK mapping for {ticker}")
         return None
@@ -52,13 +97,15 @@ def get_insider_activity(ticker: str, months_back: int = 6) -> dict:
     ticker = ticker.upper()
     # Bump the version when the parsing changes, so rows cached by the old
     # parser are ignored instead of served for another 24 h.
-    cache_key = f"{months_back}m-v2"
+    cache_key = f"{months_back}m-v3"
     cached = market_cache.get_insider_activity(ticker, cache_key)
     if cached is not None:
         return cached
 
     result = _fetch_insider_activity(ticker, months_back)
-    market_cache.set_insider_activity(ticker, result, cache_key)
+    # Don't pin a transient SEC error (timeout, 429) in the cache for 24 h.
+    if result.get("available") or result.get("no_cik"):
+        market_cache.set_insider_activity(ticker, result, cache_key)
     return result
 
 
@@ -275,32 +322,41 @@ def _merge_same_day(transactions: list[dict]) -> list[dict]:
 
 def _sec_get(url: str, timeout: int = 20) -> requests.Response | None:
     try:
-        response = requests.get(url, headers=SEC_HEADERS, timeout=timeout)
-        if response.status_code == 404:
+        return sec_request(url, timeout)
+    except HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
             return None
-        response.raise_for_status()
-        return response
+        print(f"[warn] SEC EDGAR request failed for {url}: {e}")
+        return None
     except (Timeout, RequestException) as e:
         print(f"[warn] SEC EDGAR request failed for {url}: {e}")
         return None
 
 
+def _filing_base(cik: str, accession: str) -> str:
+    return f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession.replace('-', '')}"
+
+
 def _xml_candidates(cik: str, accession: str, primary_document: str) -> list[str]:
-    cik_num = str(int(cik))
-    acc_nodash = accession.replace("-", "")
-    base = f"https://www.sec.gov/Archives/edgar/data/{cik_num}/{acc_nodash}"
+    """Likely raw-XML locations, cheapest first (no extra request needed)."""
+    base = _filing_base(cik, accession)
 
     # primaryDocument often points at the XSL-rendered HTML view
     # ("xslF345X06/edgardoc.xml"); the raw XML sits at the filing root under the
     # same file name, so try that first.
     raw_name = primary_document.rsplit("/", 1)[-1]
-    candidates = [
+    return list(dict.fromkeys([
         f"{base}/{raw_name}",
         f"{base}/{primary_document}",
         f"{base}/form4.xml",
         f"{base}/ownership.xml",
-    ]
+    ]))
 
+
+def _index_candidates(cik: str, accession: str, tried: list[str]) -> list[str]:
+    """Every .xml file listed in the filing's index, minus the ones already tried."""
+    base = _filing_base(cik, accession)
+    candidates: list[str] = []
     index_response = _sec_get(f"{base}/index.json")
     if index_response is not None:
         try:
@@ -315,7 +371,7 @@ def _xml_candidates(cik: str, accession: str, primary_document: str) -> list[str
                 if "/xsl" in name.lower():
                     continue
                 url = f"{base}/{name}"
-                if url not in candidates:
+                if url not in candidates and url not in tried:
                     candidates.append(url)
         except ValueError as e:
             print(f"[warn] SEC EDGAR: invalid filing index JSON for {accession}: {e}")
@@ -329,30 +385,35 @@ def _fetch_form4_transactions(
     primary_document: str,
     filing_date: str,
 ) -> list[dict]:
-    for url in _xml_candidates(cik, accession, primary_document):
-        response = _sec_get(url)
-        if response is None:
-            continue
-        content_type = (response.headers.get("Content-Type") or "").lower()
-        text = response.text
-        if "html" in content_type or text.lstrip().startswith("<!DOCTYPE html"):
-            continue
-        parsed = _parse_form4_xml(text, filing_date)
-        if parsed:
-            return parsed
-    return []
+    def try_urls(urls: list[str]) -> list[dict]:
+        for url in urls:
+            response = _sec_get(url)
+            if response is None:
+                continue
+            content_type = (response.headers.get("Content-Type") or "").lower()
+            text = response.text
+            if "html" in content_type or text.lstrip().startswith("<!DOCTYPE html"):
+                continue
+            parsed = _parse_form4_xml(text, filing_date)
+            if parsed:
+                return parsed
+        return []
+
+    direct = _xml_candidates(cik, accession, primary_document)
+    return try_urls(direct) or try_urls(_index_candidates(cik, accession, direct))
 
 
 def _fetch_insider_activity(ticker: str, months_back: int) -> dict:
     try:
-        cik = _get_cik(ticker)
+        cik = _lookup_cik(ticker)
         if cik is None:
-            return {"available": False, "note": f"CIK not found for {ticker}"}
+            return {
+                "available": False,
+                "no_cik": True,
+                "note": f"No SEC filer found for {ticker}. Insider filings (Form 4) exist for US-listed companies, not for ETFs or funds.",
+            }
 
-        url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-        r = requests.get(url, headers=SEC_HEADERS, timeout=20)
-        r.raise_for_status()
-        data = r.json()
+        data = sec_request(f"https://data.sec.gov/submissions/CIK{cik}.json").json()
 
         recent = data.get("filings", {}).get("recent", {})
         forms = recent.get("form", [])
@@ -383,15 +444,22 @@ def _fetch_insider_activity(ticker: str, months_back: int) -> dict:
 
         form4_dates = [filing_date for _, filing_date, _ in form4_filings]
 
+        if not form4_dates:
+            note = (
+                f"No insider filings (Form 4) for {ticker} in the last {months_back} months. "
+                "Foreign issuers that report on Form 20-F are exempt from Form 4."
+            )
+        else:
+            note = (
+                "Form 4 = insider transaction filing. Includes open-market trades (P/S), "
+                "awards (A), dispositions (D), tax withholding (F), and option exercises (M)."
+            )
         return {
             "available": True,
             "form4_filings_last_6m": len(form4_dates),
             "most_recent_form4": form4_dates[0] if form4_dates else None,
             "transactions": transactions,
-            "note": (
-                "Form 4 = insider transaction filing. Includes open-market trades (P/S), "
-                "awards (A), dispositions (D), tax withholding (F), and option exercises (M)."
-            ),
+            "note": note,
         }
     except Timeout:
         note = f"SEC EDGAR timeout fetching insider activity for {ticker}"
