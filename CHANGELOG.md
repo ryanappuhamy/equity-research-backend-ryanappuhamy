@@ -1,5 +1,16 @@
 # Changelog — Equity Research Platform
 
+## 2026-10-05 — Insider activity: parse filings from all filer agents (fixes empty table for WDC)
+
+WDC showed "73 Form 4 filings" but no transactions. Its filer agent lists the
+XSL-rendered HTML view as `primaryDocument` (`xslF345X06/edgardoc.xml`); the
+raw XML sits at the filing root under the same name, and the fallback that
+lists the filing's files used a URL that doesn't exist (`<accession>-index.json`
+instead of `index.json`). Now the raw file name is tried first and the index
+URL is fixed. Verified: WDC, AAPL, NVDA, MU each return 8 parsed transactions.
+Cached reports and insider rows refresh within 24 h, or right away with
+"Regenerate".
+
 ## 2026-10-05 — Insider activity: label by Form 4 code, merge split lines
 
 The research page showed RSU grants as insider "Buy"s ("Buy $47,645 shares",

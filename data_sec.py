@@ -290,13 +290,18 @@ def _xml_candidates(cik: str, accession: str, primary_document: str) -> list[str
     acc_nodash = accession.replace("-", "")
     base = f"https://www.sec.gov/Archives/edgar/data/{cik_num}/{acc_nodash}"
 
+    # primaryDocument often points at the XSL-rendered HTML view
+    # ("xslF345X06/edgardoc.xml"); the raw XML sits at the filing root under the
+    # same file name, so try that first.
+    raw_name = primary_document.rsplit("/", 1)[-1]
     candidates = [
+        f"{base}/{raw_name}",
         f"{base}/{primary_document}",
         f"{base}/form4.xml",
         f"{base}/ownership.xml",
     ]
 
-    index_response = _sec_get(f"{base}/{accession}-index.json")
+    index_response = _sec_get(f"{base}/index.json")
     if index_response is not None:
         try:
             index_data = index_response.json()
