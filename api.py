@@ -216,7 +216,10 @@ def portfolio_brief(
             }
 
         brief = ai_report.generate_portfolio_brief(holdings, macro=data_macro.get_macro_context())
-        market_cache.set_weekly_brief(holdings, brief)
+        # Don't cache the template fallback: a provider hiccup must not pin
+        # a degraded brief for a week.
+        if ai_report.TEMPLATE_BRIEF_MARKER not in brief:
+            market_cache.set_weekly_brief(holdings, brief)
         return {
             "portfolio": holdings,
             "brief": brief,

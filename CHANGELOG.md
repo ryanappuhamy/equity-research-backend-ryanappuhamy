@@ -1,5 +1,23 @@
 # Changelog — Equity Research Platform
 
+## 2026-10-07 — Weekly brief: stop caching cut-off AI output
+
+The brief cached on 2026-10-02 stopped after one sentence (161 chars) and was
+served for the whole week. Each provider adapter accepted any non-empty text
+without checking *why* the model stopped, so an answer cut by the token limit
+(`MAX_TOKENS` on Gemini, `length` on OpenAI-compatible, `max_tokens` on Claude)
+was returned and cached as if complete.
+
+- Gemini / OpenAI-compatible / Claude: a cut-off answer is retried once with a
+  bigger budget; if still cut, the chain moves on to the next provider/model.
+- `generate_portfolio_brief` rejects anything under 600 chars (a real brief is
+  several paragraphs) and falls back to the template.
+- `/portfolio/brief` no longer caches the template fallback, so a provider
+  hiccup can't pin a degraded brief for a week.
+- Gemini's free quota was exhausted (HTTP 429 on every model) when testing;
+  the chain handled it and produced a complete 2.5k-char brief from the next
+  provider.
+
 ## 2026-10-05 — SEC requests throttled, insider notes, and per-ticker news
 
 - All SEC EDGAR calls go through `sec_request()`: at most ~8 requests/second

@@ -131,16 +131,21 @@ def _complete_anthropic(system: str, prompt: str, max_tokens: int) -> tuple[str 
 
     for model in config.CLAUDE_MODELS:
         try:
-            msg = client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = "".join(b.text for b in msg.content if hasattr(b, "text")).strip()
-            if text:
-                return text, model
-            print(f"[error] Claude API {model}: empty response")
+            for budget in (max_tokens, max_tokens * 2):
+                msg = client.messages.create(
+                    model=model,
+                    max_tokens=budget,
+                    system=system,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                text = "".join(b.text for b in msg.content if hasattr(b, "text")).strip()
+                if text and msg.stop_reason == "max_tokens":
+                    print(f"[warn] Claude API {model}: output cut at {budget} tokens")
+                    continue
+                if text:
+                    return text, model
+                print(f"[error] Claude API {model}: empty response")
+                break
         except Exception as e:
             print(f"[error] Claude API failed with model {model}: {e}")
             continue
@@ -166,33 +171,42 @@ def _complete_gemini(
         # Google Search grounding — lets the model cite current news.
         body["tools"] = [{"google_search": {}}]
 
+    base_budget = body["generationConfig"]["maxOutputTokens"]
     for model in config.GEMINI_MODELS:
-        try:
-            resp = requests.post(
-                GEMINI_ENDPOINT.format(model=model),
-                headers=headers,
-                json=body,
-                timeout=LLM_TIMEOUT_SECONDS,
-            )
-            if resp.status_code != 200:
-                print(f"[error] Gemini API {model} -> HTTP {resp.status_code}: {resp.text[:200]}")
-                continue
+        # A MAX_TOKENS finish still returns text — cut off mid-sentence. Retry
+        # once with a bigger budget instead of passing the fragment on.
+        for budget in (base_budget, max(base_budget * 3, 16384)):
+            body["generationConfig"]["maxOutputTokens"] = budget
+            try:
+                resp = requests.post(
+                    GEMINI_ENDPOINT.format(model=model),
+                    headers=headers,
+                    json=body,
+                    timeout=LLM_TIMEOUT_SECONDS,
+                )
+                if resp.status_code != 200:
+                    print(f"[error] Gemini API {model} -> HTTP {resp.status_code}: {resp.text[:200]}")
+                    break
 
-            candidates = resp.json().get("candidates") or []
-            if not candidates:
-                print(f"[error] Gemini API {model}: no candidates returned")
-                continue
+                candidates = resp.json().get("candidates") or []
+                if not candidates:
+                    print(f"[error] Gemini API {model}: no candidates returned")
+                    break
 
-            parts = (candidates[0].get("content") or {}).get("parts") or []
-            text = "".join(p.get("text", "") for p in parts).strip()
-            if text:
-                return text, model
+                parts = (candidates[0].get("content") or {}).get("parts") or []
+                text = "".join(p.get("text", "") for p in parts).strip()
+                finish = candidates[0].get("finishReason")
+                if text and finish == "MAX_TOKENS":
+                    print(f"[warn] Gemini API {model}: output cut at {budget} tokens ({len(text)} chars)")
+                    continue
+                if text:
+                    return text, model
 
-            finish = candidates[0].get("finishReason")
-            print(f"[error] Gemini API {model}: empty text (finishReason={finish})")
-        except Exception as e:
-            print(f"[error] Gemini API {model} failed: {e}")
-            continue
+                print(f"[error] Gemini API {model}: empty text (finishReason={finish})")
+                break
+            except Exception as e:
+                print(f"[error] Gemini API {model} failed: {e}")
+                break
     print("[error] Gemini API: all models failed")
     return None, None
 
@@ -203,28 +217,34 @@ def _complete_openai_compat(system: str, prompt: str, max_tokens: int) -> tuple[
         return None, None
     model = config.OPENAI_COMPAT_MODEL
     try:
-        resp = requests.post(
-            f"{config.OPENAI_COMPAT_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {config.OPENAI_COMPAT_API_KEY}"},
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt},
-                ],
-                "max_tokens": max_tokens,
-                "temperature": 0.7,
-            },
-            timeout=LLM_TIMEOUT_SECONDS,
-        )
-        if resp.status_code != 200:
-            print(f"[error] OpenAI-compat {model} -> HTTP {resp.status_code}: {resp.text[:200]}")
+        for budget in (max_tokens, max_tokens * 2):
+            resp = requests.post(
+                f"{config.OPENAI_COMPAT_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {config.OPENAI_COMPAT_API_KEY}"},
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": budget,
+                    "temperature": 0.7,
+                },
+                timeout=LLM_TIMEOUT_SECONDS,
+            )
+            if resp.status_code != 200:
+                print(f"[error] OpenAI-compat {model} -> HTTP {resp.status_code}: {resp.text[:200]}")
+                return None, None
+            choices = resp.json().get("choices") or []
+            text = (choices[0].get("message", {}).get("content", "") if choices else "").strip()
+            finish = choices[0].get("finish_reason") if choices else None
+            if text and finish == "length":
+                print(f"[warn] OpenAI-compat {model}: output cut at {budget} tokens")
+                continue
+            if text:
+                return text, model
+            print(f"[error] OpenAI-compat {model}: empty response")
             return None, None
-        choices = resp.json().get("choices") or []
-        text = (choices[0].get("message", {}).get("content", "") if choices else "").strip()
-        if text:
-            return text, model
-        print(f"[error] OpenAI-compat {model}: empty response")
         return None, None
     except Exception as e:
         print(f"[error] OpenAI-compat {model} failed: {e}")
@@ -619,6 +639,13 @@ def _portfolio_news(tickers: list[str]) -> list[dict]:
     return items[:16]
 
 
+# A real brief is several paragraphs; anything shorter is a cut-off fragment.
+MIN_BRIEF_CHARS = 600
+
+# Present in the fallback brief only, so callers can tell it from an AI one.
+TEMPLATE_BRIEF_MARKER = "*Template brief generated from holdings data"
+
+
 def generate_portfolio_brief(portfolio_data: list[dict], macro: dict | None = None) -> str:
     """AI weekly brief for all portfolio holdings, with macro + current-news context."""
     from datetime import date
@@ -647,8 +674,8 @@ def generate_portfolio_brief(portfolio_data: list[dict], macro: dict | None = No
         text, _model = _llm_complete(
             PORTFOLIO_BRIEF_SYSTEM, prompt, max_tokens=2000, gemini_search=True
         )
-        if not text:
-            print("[error] AI: portfolio brief generation failed — using template")
+        if not text or len(text) < MIN_BRIEF_CHARS:
+            print(f"[error] AI: portfolio brief missing or too short ({len(text or '')} chars) — using template")
             return _portfolio_brief_template(portfolio_data, reason="AI provider unavailable")
         return f"# Weekly Portfolio Brief\n\n*AI-generated from current holdings, macro data and news.*\n\n{text}"
     except Exception as e:
@@ -661,7 +688,7 @@ def _portfolio_brief_template(portfolio_data: list[dict], reason: str = "") -> s
     lines = [
         "# Weekly Portfolio Brief",
         "",
-        "*Template brief generated from holdings data (AI unavailable).*",
+        TEMPLATE_BRIEF_MARKER + " (AI unavailable).*",
     ]
     if reason:
         lines.append(f"*Reason: {reason}*")
