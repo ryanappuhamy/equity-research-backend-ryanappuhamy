@@ -49,6 +49,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://equity-research-frontend-lilac.vercel.app",
+        "https://research.ryanappuhamy.com",
         "http://localhost:3000",
     ],
     allow_methods=["*"],
